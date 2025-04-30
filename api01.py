@@ -6,9 +6,12 @@ app = Flask(__name__)
 def home():
     return "API de suma funcionando correctamente."
 
-@app.route('/sumar', methods=['POST'])
+@app.route('/sumar', methods=['GET', 'POST'])
 def sumar():
-    data = request.get_json()
+    if request.method == 'POST':
+        data = request.get_json()
+    else:
+        data = request.args
 
     try:
         val1 = float(data.get('a', 0))
