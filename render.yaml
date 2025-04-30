@@ -4,4 +4,4 @@ services:
     env: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:api01.py -b 0.0.0.0:10000
+    startCommand: gunicorn api01:app -b 0.0.0.0:10000
