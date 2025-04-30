@@ -7,7 +7,7 @@ app = Flask(__name__)
 # Configura tu API Key de Gemini
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", GEMINI_API_KEY)
 genai.configure(api_key=GEMINI_API_KEY)
-MODEL_NAME"gemini-pro"
+MODEL_NAME="models/gemini-pro"
 generation_config = {
     "temperature": 0.7,
     "top_p": 1,
