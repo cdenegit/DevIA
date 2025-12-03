@@ -1,3 +1,14 @@
-flask
+from fastapi import FastAPI
+from pydantic import BaseModel
+json
+from sentinelhub import SHConfig, SentinelHubRequest, DataCollection, MimeType, bbox_to_dimensions, BBox
+from shapely.geometry import shape, mapping
+rasterio
+numpy as np
+matplotlib.pyplot as plt
+from io import BytesIO
+base64
+tempfile
+requests
 google-generativeai
 gunicorn
