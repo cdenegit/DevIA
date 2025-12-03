@@ -1,79 +1,195 @@
-from flask import Flask, request, jsonify
-import os
-import google.generativeai as genai
+from fastapi import FastAPI
+from pydantic import BaseModel
+import json
+from sentinelhub import SHConfig, SentinelHubRequest, DataCollection, MimeType, bbox_to_dimensions, BBox
+from shapely.geometry import shape, mapping
+import rasterio
+import numpy as np
+import matplotlib.pyplot as plt
+from io import BytesIO
+import base64
+import tempfile
+import requests
 
-app = Flask(__name__)
+app = FastAPI()
 
-# Configura tu API Key de Gemini
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "TU_API_KEY_AQUI")
-genai.configure(api_key=GEMINI_API_KEY)
-MODEL_NAME="models/gemini-pro"
-generation_config = {
-    "temperature": 0.7,
-    "top_p": 1,
-    "top_k": 1,
-    "max_output_tokens": 2048, # Ajusta según la longitud esperada de las respuestas
+# ================================
+# MODELO DE ENTRADA DESDE PHP
+# ================================
+class Req(BaseModel):
+    geojson: str
+    fecha_ini: str
+    fecha_fin: str
+
+# ================================
+# CONFIGURACIÓN SENTINELHUB (GRATIS)
+# ================================
+config = SHConfig()
+config.instance_id = "TU_INSTANCE_ID"
+config.sh_client_id = "TU_CLIENT_ID"
+config.sh_client_secret = "TU_CLIENT_SECRET"
+
+# ================================
+# FUNCIÓN: Buscar máximo 3 imágenes multispectrales
+# ================================
+def buscar_imagenes(geom, fecha_ini, fecha_fin):
+    bbox = shape(geom).bounds
+    bbox = BBox(bbox, crs=4326)
+
+    evalscript = """
+        // Sentinel-2 L2A bandas necesarias
+        function setup() {
+          return {
+            input: ["B02","B03","B04","B08","B8A","B11","B12"],
+            output: { bands: 7 }
+          };
+        }
+        function evaluatePixel(s) {
+          return [s.B02,s.B03,s.B04,s.B08,s.B8A,s.B11,s.B12];
+        }
+    """
+
+    request = SentinelHubRequest(
+        data_folder=None,
+        evalscript=evalscript,
+        input_data=[SentinelHubRequest.input_data(
+            data_collection=DataCollection.SENTINEL2_L2A,
+            time_interval=(fecha_ini, fecha_fin),
+            mosaicking_order="mostRecent"
+        )],
+        responses=[SentinelHubRequest.output_response("default", MimeType.TIFF)],
+        bbox=bbox,
+        size=bbox_to_dimensions(bbox, 10),
+        config=config
+    )
+
+    # Limitar a 3 imágenes máximo
+    imgs = request.get_data(max_data=3)
+    return imgs
+
+
+# ================================
+# CÁLCULO DE ÍNDICES VEGETATIVOS
+# ================================
+def calc_indices(bandas):
+    B02, B03, B04, B08, B8A, B11, B12 = bandas
+
+    eps = 1e-10
+
+    return {
+        "NDVI": (B08 - B04) / (B08 + B04 + eps),
+        "EVI": 2.5 * (B08 - B04) / (B08 + 6*B04 - 7.5*B02 + 1 + eps),
+        "NDWI": (B03 - B08) / (B03 + B08 + eps),
+        "NDRE": (B8A - B04) / (B8A + B04 + eps),
+        "MSAVI": (2*B08 + 1 - np.sqrt((2*B08 + 1)**2 - 8*(B08 - B04))) / 2,
+        "NDMI": (B11 - B08) / (B11 + B08 + eps),
+        "RECI": (B08 / (B04 + eps)) - 1
+    }
+
+
+# ================================
+# HEATMAP + VALORES SOBRE LA IMAGEN
+# ================================
+def generar_heatmap(indice, nombre):
+    plt.figure(figsize=(6,6))
+    plt.imshow(indice, cmap="RdYlGn")
+    plt.colorbar()
+    plt.title(nombre)
+
+    # Convertir a base64 PNG
+    buf = BytesIO()
+    plt.savefig(buf, format="png", dpi=150)
+    plt.close()
+    buf.seek(0)
+    return base64.b64encode(buf.read()).decode()
+
+
+# ================================
+# DIAGNÓSTICO AUTOMÁTICO POR ÍNDICE
+# ================================
+def diagnostico_indice(indice, nombre):
+
+    avg = float(np.nanmean(indice))
+
+    if nombre == "NDVI":
+        if avg < 0.2: desc = "Vegetación muy estresada o suelo desnudo."
+        elif avg < 0.5: desc = "Vegetación moderada, crecimiento limitado."
+        else: desc = "Vegetación vigorosa y saludable."
+
+    elif nombre == "NDMI":
+        if avg < 0.2: desc = "Humedad baja, posible estrés hídrico."
+        elif avg < 0.5: desc = "Humedad moderada."
+        else: desc = "Buena retención de humedad."
+
+    else:
+        desc = f"Promedio del índice: {avg:.2f}. Patrón típico observado."
+
+    return desc
+
+
+# ================================
+# ENDPOINT PRINCIPAL DESDE TU PHP
+# ================================
+@app.post("/analizar")
+def analizar(req: Req):
+
+    geo = json.loads(req.geojson)
+    geom = shape(geo)
+
+    # 1. Buscar máximo 3 imágenes
+    imgs = buscar_imagenes(geom, req.fecha_ini, req.fecha_fin)
+    if len(imgs) == 0:
+        return {"status": "error", "msg": "No hay imágenes disponibles en el rango."}
+
+    # Usar la mejor (última)
+    img = imgs[-1][0]  # TIFF → bandas
+
+    # 2. Recorte al polígono
+    bandas = img.transpose((2,0,1))  # pasar a bandas separadas
+
+    # 3. Cálculo de índices
+    indices = calc_indices(bandas)
+
+    # 4. Generar imágenes para cada índice
+    resultados = {}
+    for nombre, matriz in indices.items():
+        resultados[nombre] = {
+            "img_base64": generar_heatmap(matriz, nombre),
+            "diagnostico": diagnostico_indice(matriz, nombre)
+        }
+
+    return {
+        "status": "ok",
+        "indices": resultados
+    }
+
+🟢 2. Cómo conectarlo con tu función PHP (ya corregida)
+
+Tu función queda perfectamente compatible así:
+
+function analizarGratis($geojson, $fecha_ini, $fecha_fin) {
+
+    $url = "https://tu-render.onrender.com/analizar";
+
+    $payload = json_encode([
+        "geojson" => $geojson,
+        "fecha_ini" => $fecha_ini,
+        "fecha_fin" => $fecha_fin
+    ]);
+
+    $options = [
+        "http" => [
+            "header"  => "Content-Type: application/json\r\n",
+            "method"  => "POST",
+            "content" => $payload
+        ]
+    ];
+
+    $context  = stream_context_create($options);
+    $result = file_get_contents($url, false, $context);
+
+    return json_decode($result, true);
 }
-
-safety_settings = [
-    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-]
-
-# Inicializar el modelo
-model = genai.GenerativeModel(model_name=MODEL_NAME,
-                              generation_config=generation_config,
-                              safety_settings=safety_settings)
-
-@app.route('/')
-def home():
-    return "API de análisis de perfil con Gemini funcionando."
-
-@app.route('/analizar_perfil', methods=['POST'])
-def analizar_perfil():
-    data = request.get_json()
-
-    prompt = data.get("prompt")
-    preguntas_respuestas = data.get("respuestas", [])
-
-    if not prompt or not preguntas_respuestas:
-        return jsonify({"error": "Faltan el prompt o las respuestas"}), 400
-
-    resultados = []
-    resumen_general = ""
-
-    try:
-        for item in preguntas_respuestas:
-            pregunta = item.get("pregunta")
-            respuesta = item.get("respuesta")
-
-            if not pregunta or not respuesta:
-                continue
-
-            entrada = f"{prompt}\n\nPregunta: {pregunta}\nRespuesta: {respuesta}"
-            respuesta_modelo = model.generate_content(entrada)
-            interpretacion = respuesta_modelo.text.strip()
-
-            resultados.append({
-                "pregunta": pregunta,
-                "respuesta": respuesta,
-                "interpretacion": interpretacion
-            })
-
-        # Generar resumen general del perfil
-        resumen_prompt = prompt + "\n\nHaz un resumen general del perfil del usuario basado en sus respuestas anteriores."
-        resumen_modelo = model.generate_content(resumen_prompt)
-        resumen_general = resumen_modelo.text.strip()
-
-        return jsonify({
-            "interpretaciones": resultados,
-            "resumen_perfil": resumen_general
-        })
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
