@@ -1,14 +1,9 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
-json
-from sentinelhub import SHConfig, SentinelHubRequest, DataCollection, MimeType, bbox_to_dimensions, BBox
-from shapely.geometry import shape, mapping
-rasterio
-numpy as np
-matplotlib.pyplot as plt
-from io import BytesIO
-base64
-tempfile
-requests
-google-generativeai
-gunicorn
+fastapi==0.115.0
+uvicorn==0.32.0
+pydantic==2.9.2
+sentinelhub==3.10.3
+shapely==2.0.6
+rasterio==1.4.2
+numpy==2.1.0
+matplotlib==3.9.2
+requests==2.32.3
