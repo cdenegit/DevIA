@@ -27,9 +27,9 @@ class Req(BaseModel):
 # CONFIGURACIÓN SENTINELHUB (GRATIS)
 # ================================
 config = SHConfig()
-config.instance_id = "TU_INSTANCE_ID"
-config.sh_client_id = "TU_CLIENT_ID"
-config.sh_client_secret = "TU_CLIENT_SECRET"
+config.instance_id = "c55ee0f7-8a75-4877-bc45-bdd583afc079"
+config.sh_client_id = "cdeneg@gmail.com"
+config.sh_client_secret = "_4TUMceJ^kv~Nm_"
 
 # ================================
 # FUNCIÓN: Buscar máximo 3 imágenes multispectrales
