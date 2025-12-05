@@ -163,33 +163,5 @@ def analizar(req: Req):
         "indices": resultados
     }
 
-🟢 2. Cómo conectarlo con tu función PHP (ya corregida)
-
-Tu función queda perfectamente compatible así:
-
-function analizarGratis($geojson, $fecha_ini, $fecha_fin) {
-
-    $url = "https://tu-render.onrender.com/analizar";
-
-    $payload = json_encode([
-        "geojson" => $geojson,
-        "fecha_ini" => $fecha_ini,
-        "fecha_fin" => $fecha_fin
-    ]);
-
-    $options = [
-        "http" => [
-            "header"  => "Content-Type: application/json\r\n",
-            "method"  => "POST",
-            "content" => $payload
-        ]
-    ];
-
-    $context  = stream_context_create($options);
-    $result = file_get_contents($url, false, $context);
-
-    return json_decode($result, true);
-}
-
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
