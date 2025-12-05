@@ -5,6 +5,8 @@ from sentinelhub import SHConfig, SentinelHubRequest, DataCollection, MimeType, 
 from shapely.geometry import shape, mapping
 import rasterio
 import numpy as np
+import matplotlib
+matplotlib.use("Agg")   # Backend sin interfaz gráfica
 import matplotlib.pyplot as plt
 from io import BytesIO
 import base64
@@ -162,6 +164,3 @@ def analizar(req: Req):
         "status": "ok",
         "indices": resultados
     }
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=10000)
