@@ -35,9 +35,34 @@ config.sh_client_secret = "TU_CLIENT_SECRET"
 # FUNCIÓN: Buscar máximo 3 imágenes multispectrales
 # ================================
 def buscar_imagenes(geom, fecha_ini, fecha_fin):
-    bbox = shape(geom).bounds
-    bbox = BBox(bbox, crs=4326)
 
+    bbox = BBox(geom.bounds, crs=4326)
+
+    # 1. Buscar todas las fechas disponibles en el rango
+    from sentinelhub import SentinelHubCatalog
+
+    catalog = SentinelHubCatalog(config=config)
+
+    search = catalog.search(
+        DataCollection.SENTINEL2_L2A,
+        bbox=bbox,
+        time=(fecha_ini, fecha_fin),
+        query={"eo:cloud_cover": {"lt": 70}},
+        limit=20
+    )
+
+    items = list(search)
+
+    if not items:
+        return []
+
+    # 2. Ordenar por fecha ascendente
+    items_sorted = sorted(items, key=lambda x: x["properties"]["datetime"])
+
+    # 3. Tomar las últimas 3 (más recientes)
+    selected = items_sorted[-3:]
+
+    # 4. Descargar imágenes una por una (con evalscript)
     evalscript = """
         // Sentinel-2 L2A bandas necesarias
         function setup() {
@@ -51,24 +76,28 @@ def buscar_imagenes(geom, fecha_ini, fecha_fin):
         }
     """
 
-    request = SentinelHubRequest(
-        data_folder=None,
-        evalscript=evalscript,
-        input_data=[SentinelHubRequest.input_data(
-            data_collection=DataCollection.SENTINEL2_L2A,
-            time_interval=(fecha_ini, fecha_fin),
-            mosaicking_order="mostRecent"
-        )],
-        responses=[SentinelHubRequest.output_response("default", MimeType.TIFF)],
-        bbox=bbox,
-        size=bbox_to_dimensions(bbox, 10),
-        config=config
-    )
+    images = []
 
-    # Limitar a 3 imágenes máximo
-    imgs = request.get_data(max_data=3)
-    return imgs
+    for item in selected:
 
+        req = SentinelHubRequest(
+            evalscript=evalscript,
+            input_data=[
+                SentinelHubRequest.input_data(
+                    data_collection=DataCollection.SENTINEL2_L2A,
+                    time_interval=item["properties"]["datetime"]
+                )
+            ],
+            responses=[SentinelHubRequest.output_response("default", MimeType.TIFF)],
+            bbox=bbox,
+            size=bbox_to_dimensions(bbox, 10),
+            config=config
+        )
+
+        data = req.get_data()   # ahora sin max_data
+        images.append(data)
+
+    return images
 
 # ================================
 # CÁLCULO DE ÍNDICES VEGETATIVOS
