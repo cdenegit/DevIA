@@ -134,33 +134,57 @@ def diagnostico_indice(indice, nombre):
 # ================================
 @app.post("/analizar")
 def analizar(req: Req):
+    try:
+        # 1. Parseo de GeoJSON
+        geo = json.loads(req.geojson)
+        geom = shape(geo)
 
-    geo = json.loads(req.geojson)
-    geom = shape(geo)
+        # 2. Buscar máximo 3 imágenes
+        imgs = buscar_imagenes(geom, req.fecha_ini, req.fecha_fin)
+        if len(imgs) == 0:
+            return {"status": "error", "msg": "No hay imágenes disponibles en el rango."}
 
-    # 1. Buscar máximo 3 imágenes
-    imgs = buscar_imagenes(geom, req.fecha_ini, req.fecha_fin)
-    if len(imgs) == 0:
-        return {"status": "error", "msg": "No hay imágenes disponibles en el rango."}
+        # Usar la mejor imagen disponible (última)
+        try:
+            img = imgs[-1][0]   # TIFF → bandas
+        except Exception as e:
+            return {"status": "error", "msg": f"Error al leer TIFF: {str(e)}"}
 
-    # Usar la mejor (última)
-    img = imgs[-1][0]  # TIFF → bandas
+        # 3. Separar bandas
+        try:
+            bandas = img.transpose((2, 0, 1))
+        except Exception as e:
+            return {"status": "error", "msg": f"Error al procesar bandas: {str(e)}"}
 
-    # 2. Recorte al polígono
-    bandas = img.transpose((2,0,1))  # pasar a bandas separadas
+        # 4. Calcular índices
+        try:
+            indices = calc_indices(bandas)
+        except Exception as e:
+            return {"status": "error", "msg": f"Error al calcular índices: {str(e)}"}
 
-    # 3. Cálculo de índices
-    indices = calc_indices(bandas)
+        # 5. Generar imágenes y diagnósticos
+        resultados = {}
+        for nombre, matriz in indices.items():
+            try:
+                resultados[nombre] = {
+                    "img_base64": generar_heatmap(matriz, nombre),
+                    "diagnostico": diagnostico_indice(matriz, nombre)
+                }
+            except Exception as e:
+                resultados[nombre] = {
+                    "img_base64": None,
+                    "diagnostico": f"Error generando heatmap: {str(e)}"
+                }
 
-    # 4. Generar imágenes para cada índice
-    resultados = {}
-    for nombre, matriz in indices.items():
-        resultados[nombre] = {
-            "img_base64": generar_heatmap(matriz, nombre),
-            "diagnostico": diagnostico_indice(matriz, nombre)
+        # 6. Respuesta final al cliente PHP
+        return {
+            "status": "ok",
+            "indices": resultados
         }
 
-    return {
-        "status": "ok",
-        "indices": resultados
-    }
+    except Exception as e:
+        # Error general no controlado
+        return {
+            "status": "error",
+            "msg": f"Error inesperado: {str(e)}"
+        }
