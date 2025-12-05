@@ -38,17 +38,35 @@ def buscar_imagenes(geom, fecha_ini, fecha_fin):
 
     bbox = BBox(geom.bounds, crs=4326)
 
-    # 1. Buscar todas las fechas disponibles en el rango
-    from sentinelhub import SentinelHubCatalog
+    from sentinelhub import SentinelHubCatalog, CRS
 
     catalog = SentinelHubCatalog(config=config)
 
+    # ===============================
+    # 1. CONSULTA CQL2 (Filtra nubes < 70%)
+    # ===============================
+    filter_cql2 = {
+        "op": "and",
+        "args": [
+            {
+                "op": "<",
+                "args": [
+                    {"property": "eo:cloud_cover"},
+                    70
+                ]
+            }
+        ]
+    }
+
+    # ===============================
+    # 2. Búsqueda inicial SOLO metadatos
+    # ===============================
     search = catalog.search(
-        DataCollection.SENTINEL2_L2A,
+        collection=DataCollection.SENTINEL2_L2A,
         bbox=bbox,
         time=(fecha_ini, fecha_fin),
-        query={"eo:cloud_cover": {"lt": 70}},
-        limit=20
+        filter=filter_cql2,
+        limit=20,          # máximo 20 resultados para filtrar después
     )
 
     items = list(search)
@@ -56,15 +74,14 @@ def buscar_imagenes(geom, fecha_ini, fecha_fin):
     if not items:
         return []
 
-    # 2. Ordenar por fecha ascendente
+    # 3. Ordenar cronológicamente para tomar las más recientes
     items_sorted = sorted(items, key=lambda x: x["properties"]["datetime"])
+    selected = items_sorted[-3:]  # máximo 3 imágenes
 
-    # 3. Tomar las últimas 3 (más recientes)
-    selected = items_sorted[-3:]
-
-    # 4. Descargar imágenes una por una (con evalscript)
+    # ===============================
+    # 4. Descargar cada imagen individualmente
+    # ===============================
     evalscript = """
-        // Sentinel-2 L2A bandas necesarias
         function setup() {
           return {
             input: ["B02","B03","B04","B08","B8A","B11","B12"],
@@ -94,7 +111,7 @@ def buscar_imagenes(geom, fecha_ini, fecha_fin):
             config=config
         )
 
-        data = req.get_data()   # ahora sin max_data
+        data = req.get_data()
         images.append(data)
 
     return images
