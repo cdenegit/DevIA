@@ -38,14 +38,14 @@ def buscar_imagenes(geom, fecha_ini, fecha_fin):
 
     bbox = BBox(geom.bounds, crs=4326)
 
-    from sentinelhub import SentinelHubCatalog, CRS
+    from sentinelhub import SentinelHubCatalog
 
     catalog = SentinelHubCatalog(config=config)
 
     # ===============================
-    # 1. CONSULTA CQL2 (Filtra nubes < 70%)
+    # Filtro CQL2 JSON (correcto)
     # ===============================
-    filter_cql2 = {
+    filter_cql2_json = {
         "op": "and",
         "args": [
             {
@@ -59,14 +59,15 @@ def buscar_imagenes(geom, fecha_ini, fecha_fin):
     }
 
     # ===============================
-    # 2. Búsqueda inicial SOLO metadatos
+    # Buscar metadatos (solo items)
     # ===============================
     search = catalog.search(
         collection=DataCollection.SENTINEL2_L2A,
         bbox=bbox,
         time=(fecha_ini, fecha_fin),
-        filter=filter_cql2,
-        limit=20,          # máximo 20 resultados para filtrar después
+        filter=filter_cql2_json,
+        filter_lang="cql2-json",   # ← ← ← OBLIGATORIO
+        limit=20
     )
 
     items = list(search)
@@ -74,12 +75,12 @@ def buscar_imagenes(geom, fecha_ini, fecha_fin):
     if not items:
         return []
 
-    # 3. Ordenar cronológicamente para tomar las más recientes
+    # Ordenar por fecha
     items_sorted = sorted(items, key=lambda x: x["properties"]["datetime"])
-    selected = items_sorted[-3:]  # máximo 3 imágenes
+    selected = items_sorted[-3:]   # max 3
 
     # ===============================
-    # 4. Descargar cada imagen individualmente
+    # Descargar las imágenes elegidas
     # ===============================
     evalscript = """
         function setup() {
@@ -93,7 +94,7 @@ def buscar_imagenes(geom, fecha_ini, fecha_fin):
         }
     """
 
-    images = []
+    results = []
 
     for item in selected:
 
@@ -112,9 +113,9 @@ def buscar_imagenes(geom, fecha_ini, fecha_fin):
         )
 
         data = req.get_data()
-        images.append(data)
+        results.append(data)
 
-    return images
+    return results
 
 # ================================
 # CÁLCULO DE ÍNDICES VEGETATIVOS
