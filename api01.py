@@ -12,13 +12,7 @@ from io import BytesIO
 import base64
 import tempfile
 import requests
-from sentinelhub import SentinelHubService
 
-try:
-    token = SentinelHubService(config=config).token
-    print("TOKEN OK")
-except Exception as e:
-    print("TOKEN ERROR:", e)
 app = FastAPI()
 
 # ================================
