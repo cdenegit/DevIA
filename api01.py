@@ -12,7 +12,13 @@ from io import BytesIO
 import base64
 import tempfile
 import requests
+from sentinelhub import SentinelHubService
 
+try:
+    token = SentinelHubService(config=config).token
+    print("TOKEN OK")
+except Exception as e:
+    print("TOKEN ERROR:", e)
 app = FastAPI()
 
 # ================================
@@ -30,6 +36,10 @@ config = SHConfig()
 config.instance_id = "c55ee0f7-8a75-4877-bc45-bdd583afc079"
 config.sh_client_id = "cdeneg@gmail.com"
 config.sh_client_secret = "_4TUMceJ^kv~Nm_"
+
+print("INSTANCE:", config.instance_id)
+print("CLIENT:", config.sh_client_id)
+print("SECRET:", "OK" if config.sh_client_secret else "Vacio")
 
 # ================================
 # FUNCIÓN: Buscar máximo 3 imágenes multispectrales
