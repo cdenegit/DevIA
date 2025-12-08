@@ -31,8 +31,8 @@ class Req(BaseModel):
 # ===============================
 config = SHConfig()
 
-config.sh_client_id = "c55ee0f7-8a75-4877-bc45-bdd583afc079"
-config.sh_client_secret = "_4TUMceJ^kv~Nm_"
+config.sh_client_id = "51f7ce9b-3718-4960-99b6-65f3f963611d"
+config.sh_client_secret = "CF7oglmD9yLwefP3Od30Tg8ZBuciiMmF"
 config.sh_base_url = "https://services.sentinel-hub.com"
 
 if not config.sh_client_id or not config.sh_client_secret:
