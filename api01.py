@@ -31,9 +31,9 @@ class Req(BaseModel):
 # ===============================
 config = SHConfig()
 
-config.sh_client_id = os.getenv("SH_CLIENT_ID", "cdeneg@gmail.com")
-config.sh_client_secret = os.getenv("SH_CLIENT_SECRET", "_4TUMceJ^kv~Nm_")
-config.instance_id = os.getenv("SH_INSTANCE_ID", "c55ee0f7-8a75-4877-bc45-bdd583afc079")
+config.instance_id = "c55ee0f7-8a75-4877-bc45-bdd583afc079"
+config.sh_client_id = "cdeneg@gmail.com"
+config.sh_client_secret = "_4TUMceJ^kv~Nm_"
 
 if not config.sh_client_id or not config.sh_client_secret:
     print("⚠ ERROR: Faltan credenciales de SentinelHub")
