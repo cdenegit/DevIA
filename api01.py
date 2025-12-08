@@ -247,121 +247,145 @@ def dashboard(req: Req):
     return HTMLResponse(content=html)
 
 
+    
+# =====================================
+# Dashboard HTML con Bootstrap 5
+# =====================================
+import json
+
+def generar_dashboard(indices, geojson, fecha_ini, fecha_fin):
+    """
+    Construye el HTML del dashboard de forma segura sin usar f-strings
+    multilínea que contengan llaves y que rompan el archivo en el editor.
+    """
+
+    # Serializamos el geojson para que sea seguro en JS
+    try:
+        geojson_js = json.dumps(json.loads(geojson))
+    except Exception:
+        # Si ya es dict, convertir directamente
+        geojson_js = json.dumps(geojson)
+
+    parts = []
+
+    # Header (no f-string)
+    parts.append("""<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dashboard de Índices</title>
+
+  <!-- Bootstrap 5 -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+
+  <!-- Leaflet -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <style>
+    #map {
+      height: 350px;
+      border-radius: 12px;
+      margin-bottom: 20px;
+    }
+  </style>
+</head>
+
+<body class="bg-light">
+  <div class="container py-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+      <h1>Dashboard de Índices Vegetativos</h1>
+      <button class="btn btn-danger btn-lg" onclick="descargarPDF()">📄 Descargar PDF</button>
+    </div>
+
+    <!-- MAPA -->
+    <div id="map"></div>
+
+    <div class="row g-4">
+""")
+
+    # Cards for indices (built by simple concatenation)
+    for nombre, data in indices.items():
+        img_b64 = data.get("img_base64", "")
+        diagnostico = data.get("diagnostico", "").replace("\n", " ")
+        # escape single quotes in nombre and diagnostico to avoid breaking HTML attributes
+        safe_nombre = str(nombre).replace("'", "&#39;")
+        safe_diag = str(diagnostico).replace("'", "&#39;")
+
+        card_html = (
+            "<div class=\"col-12 col-md-6 col-lg-4\">"
+              "<div class=\"card shadow\">"
+                "<img src=\"data:image/png;base64," + img_b64 + "\" "
+                      "class=\"card-img-top img-fluid\" alt=\"" + safe_nombre + "\">"
+                "<div class=\"card-body\">"
+                  "<h5 class=\"card-title\">" + safe_nombre + "</h5>"
+                  "<p class=\"card-text\">" + safe_diag + "</p>"
+                "</div>"
+              "</div>"
+            "</div>\n"
+        )
+        parts.append(card_html)
+
+    # Close the cards container and add script (insert geojson_js and dates via concatenation)
+    script_head = (
+        "    </div>\n"  # close row
+        "  </div>\n\n"  # close container
+        "  <script>\n"
+        "    var map = L.map('map');\n\n"
+        "    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {\n"
+        "      maxZoom: 19\n"
+        "    }).addTo(map);\n\n"
+        "    var geo = "
+    )
+    parts.append(script_head)
+    parts.append(geojson_js)  # already a JSON string (no extra quotes)
+    script_mid = ";\n\n" \
+                 "    var capa = L.geoJSON(geo, {\n" \
+                 "      style: function() {\n" \
+                 "        return { color: 'red', weight: 2, fillOpacity: 0.1 };\n" \
+                 "      }\n" \
+                 "    }).addTo(map);\n\n" \
+                 "    map.fitBounds(capa.getBounds());\n\n" \
+                 "    function descargarPDF() {\n" \
+                 "      fetch('/pdf', {\n" \
+                 "        method: 'POST',\n" \
+                 "        headers: { 'Content-Type': 'application/json' },\n" \
+                 "        body: JSON.stringify({\n" \
+                 "          geojson: JSON.stringify(geo),\n"
+    parts.append(script_mid)
+    # insert fecha_ini and fecha_fin safely (escape quotes)
+    safe_fecha_ini = str(fecha_ini).replace('"', '\\"')
+    safe_fecha_fin = str(fecha_fin).replace('"', '\\"')
+    parts.append("          \"fecha_ini\": \"" + safe_fecha_ini + "\",\n")
+    parts.append("          \"fecha_fin\": \"" + safe_fecha_fin + "\"\n")
+    script_tail = (
+        "        })\n"
+        "      })\n"
+        "      .then(function(resp) { return resp.blob(); })\n"
+        "      .then(function(blob) {\n"
+        "        var url = URL.createObjectURL(blob);\n"
+        "        var a = document.createElement('a');\n"
+        "        a.href = url;\n"
+        "        a.download = 'diagnostico.pdf';\n"
+        "        document.body.appendChild(a);\n"
+        "        a.click();\n"
+        "        a.remove();\n"
+        "        URL.revokeObjectURL(url);\n"
+        "      });\n"
+        "    }\n\n"
+        "  </script>\n\n"
+        "</body>\n"
+        "</html>\n"
+    )
+    parts.append(script_tail)
+
+    # Join and return
+    return "".join(parts)
+
+
 # =====================================
 # Server
 # =====================================
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
-    
-# =====================================
-# Dashboard HTML con Bootstrap 5
-# =====================================
-def generar_dashboard(indices, geojson, fecha_ini, fecha_fin):
-
-    html = f"""
-    <!DOCTYPE html>
-    <html lang='es'>
-    <head>
-        <meta charset='UTF-8'>
-        <meta name='viewport' content='width=device-width, initial-scale=1'>
-        <title>Dashboard de Índices</title>
-
-        <!-- Bootstrap 5 -->
-        <link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css' rel='stylesheet'>
-
-        <!-- Leaflet -->
-        <link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'>
-        <script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script>
-
-        <style>
-            #map {{
-                height: 350px;
-                border-radius: 12px;
-                margin-bottom: 20px;
-            }}
-        </style>
-    </head>
-
-    <body class='bg-light'>
-        <div class='container py-4'>
-
-            <div class='d-flex justify-content-between align-items-center mb-4'>
-                <h1 class=''>Dashboard de Índices Vegetativos</h1>
-
-                <button class='btn btn-danger btn-lg'
-                    onclick="descargarPDF()">
-                    📄 Descargar PDF
-                </button>
-            </div>
-
-            <!-- MAPA -->
-            <div id='map'></div>
-
-            <div class='row g-4'>
-    """
-
-    for nombre, data in indices.items():
-        html += f"""
-        <div class='col-12 col-md-6 col-lg-4'>
-            <div class='card shadow'>
-                <img src='data:image/png;base64,{data["img_base64"]}' 
-                     class='card-img-top img-fluid' alt='{nombre}'>
-
-                <div class='card-body'>
-                    <h5 class='card-title'>{nombre}</h5>
-                    <p class='card-text'>{data["diagnostico"]}</p>
-                </div>
-            </div>
-        </div>
-        """
-
-    html += f"""
-            </div>
-        </div>
-
-        <script>
-            var map = L.map('map');
-
-            L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
-                maxZoom: 19
-            }}).addTo(map);
-
-            var geo = {geojson};
-
-            var capa = L.geoJSON(geo, {{
-                style: {{
-                    color: 'red',
-                    weight: 2,
-                    fillOpacity: 0.1
-                }}
-            }}).addTo(map);
-
-            map.fitBounds(capa.getBounds());
-            
-            function descargarPDF() {{
-                fetch('/pdf', {{
-                    method: 'POST',
-                    headers: {{ 'Content-Type': 'application/json' }},
-                    body: JSON.stringify({{
-                        geojson: JSON.stringify(geo),
-                        fecha_ini: "{fecha_ini}",
-                        fecha_fin: "{fecha_fin}"
-                    }})
-                }})
-                .then(resp => resp.blob())
-                .then(blob => {{
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = "diagnostico.pdf";
-                    a.click();
-                }});
-            }}
-        </script>
-
-    </body>
-    </html>
-    """
-
-    return html
-
