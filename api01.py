@@ -3,7 +3,7 @@ from pydantic import BaseModel
 import json
 import os
 from sentinelhub import (
-    SHConfig, BBox, DataCollection, SentinelHubCatalog,
+    SHConfig, BBox, CRS, DataCollection, SentinelHubCatalog,
     SentinelHubRequest, MimeType, bbox_to_dimensions
 )
 from shapely.geometry import shape
@@ -31,20 +31,20 @@ class Req(BaseModel):
 # ===============================
 config = SHConfig()
 
-config.instance_id = "c55ee0f7-8a75-4877-bc45-bdd583afc079"
-config.sh_client_id = "cdeneg@gmail.com"
+config.sh_client_id = "c55ee0f7-8a75-4877-bc45-bdd583afc079"
 config.sh_client_secret = "_4TUMceJ^kv~Nm_"
+config.sh_base_url = "https://services.sentinel-hub.com"
 
 if not config.sh_client_id or not config.sh_client_secret:
-    print("⚠ ERROR: Faltan credenciales de SentinelHub")
+    print("⚠ ERROR: Credenciales OAuth2 incompletas.")
 
 
 # ===============================
-# BUSCAR IMÁGENES
+# BÚSQUEDA DE IMÁGENES
 # ===============================
 def buscar_imagenes(geom, fecha_ini, fecha_fin):
 
-    bbox = BBox(geom.bounds, crs=4326)
+    bbox = BBox(bbox=geom.bounds, crs=CRS.WGS84)
     catalog = SentinelHubCatalog(config=config)
 
     # Filtro CQL2 JSON
@@ -67,16 +67,19 @@ def buscar_imagenes(geom, fecha_ini, fecha_fin):
         time=(fecha_ini, fecha_fin),
         filter=filter_cql2_json,
         filter_lang="cql2-json",
-        limit=20
+        limit=30
     )
 
     items = list(search)
+
     if not items:
         return []
 
+    # Ordenarlos por fecha
     items_sorted = sorted(items, key=lambda x: x["properties"]["datetime"])
-    selected = items_sorted[-3:]
+    selected = items_sorted[-3:]  # Las 3 más recientes
 
+    # Evalscript Sentinel-2 bandas necesarias
     evalscript = """
         function setup() {
           return {
@@ -91,12 +94,15 @@ def buscar_imagenes(geom, fecha_ini, fecha_fin):
 
     resultados = []
     for item in selected:
+
+        timestamp = item["properties"]["datetime"]
+
         req = SentinelHubRequest(
             evalscript=evalscript,
             input_data=[
                 SentinelHubRequest.input_data(
                     data_collection=DataCollection.SENTINEL2_L2A,
-                    time_interval=item["properties"]["datetime"]
+                    time_interval=(timestamp, timestamp)
                 )
             ],
             responses=[SentinelHubRequest.output_response("default", MimeType.TIFF)],
@@ -104,6 +110,7 @@ def buscar_imagenes(geom, fecha_ini, fecha_fin):
             size=bbox_to_dimensions(bbox, 10),
             config=config
         )
+
         resultados.append(req.get_data())
 
     return resultados
@@ -128,7 +135,7 @@ def calc_indices(bandas):
 
 
 # ===============================
-# Heatmap a Base64
+# Heatmap Base64
 # ===============================
 def generar_heatmap(indice, nombre):
     plt.figure(figsize=(6,6))
@@ -144,7 +151,7 @@ def generar_heatmap(indice, nombre):
 
 
 # ===============================
-# Diagnóstico
+# Diagnóstico simple
 # ===============================
 def diagnostico_indice(indice, nombre):
     avg = float(np.nanmean(indice))
@@ -153,10 +160,12 @@ def diagnostico_indice(indice, nombre):
         if avg < 0.2: desc = "Vegetación muy estresada o sin cobertura."
         elif avg < 0.5: desc = "Vegetación moderada."
         else: desc = "Vegetación saludable."
+
     elif nombre == "NDMI":
         if avg < 0.2: desc = "Baja humedad."
         elif avg < 0.5: desc = "Humedad media."
         else: desc = "Buena humedad."
+
     else:
         desc = f"Valor medio: {avg:.2f}"
 
@@ -173,11 +182,12 @@ def analizar(req: Req):
         geom = shape(geo)
 
         imgs = buscar_imagenes(geom, req.fecha_ini, req.fecha_fin)
-        if len(imgs) == 0:
-            return {"status": "error", "msg": "No hay imágenes disponibles."}
 
-        img = imgs[-1][0]  # TIFF
-        bandas = img.transpose((2, 0, 1))
+        if len(imgs) == 0:
+            return {"status": "error", "msg": "No se encontraron imágenes compatibles."}
+
+        img = imgs[-1][0]  # TIFF (H, W, 7 bandas)
+        bandas = img.transpose((2, 0, 1))  # -> (7, H, W)
 
         indices = calc_indices(bandas)
 
