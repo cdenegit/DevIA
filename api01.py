@@ -1,60 +1,53 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
 import json
-from sentinelhub import SHConfig, SentinelHubRequest, DataCollection, MimeType, bbox_to_dimensions, BBox
-from shapely.geometry import shape, mapping
-import rasterio
+import os
+from sentinelhub import (
+    SHConfig, BBox, DataCollection, SentinelHubCatalog,
+    SentinelHubRequest, MimeType, bbox_to_dimensions
+)
+from shapely.geometry import shape
 import numpy as np
 import matplotlib
-matplotlib.use("Agg")   # Backend sin interfaz gráfica
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from io import BytesIO
 import base64
-import tempfile
-import requests
-import os
 import uvicorn
 
-if __name__ == "__main__":
-    port = int(os.getenv("PORT", 10000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
-    
+# ===============================
+# FastAPI
+# ===============================
 app = FastAPI()
 
-# ================================
-# MODELO DE ENTRADA DESDE PHP
-# ================================
 class Req(BaseModel):
     geojson: str
     fecha_ini: str
     fecha_fin: str
 
-# ================================
-# CONFIGURACIÓN SENTINELHUB (GRATIS)
-# ================================
+
+# ===============================
+# SentinelHub Config (OAuth2)
+# ===============================
 config = SHConfig()
-config.instance_id = "c55ee0f7-8a75-4877-bc45-bdd583afc079"
-config.sh_client_id = "cdeneg@gmail.com"
-config.sh_client_secret = "_4TUMceJ^kv~Nm_"
 
-print("INSTANCE:", config.instance_id)
-print("CLIENT:", config.sh_client_id)
-print("SECRET:", "OK" if config.sh_client_secret else "Vacio")
+config.sh_client_id = os.getenv("SH_CLIENT_ID", "cdeneg@gmail.com")
+config.sh_client_secret = os.getenv("SH_CLIENT_SECRET", "_4TUMceJ^kv~Nm_")
+config.instance_id = os.getenv("SH_INSTANCE_ID", "c55ee0f7-8a75-4877-bc45-bdd583afc079")
 
-# ================================
-# FUNCIÓN: Buscar máximo 3 imágenes multispectrales
-# ================================
+if not config.sh_client_id or not config.sh_client_secret:
+    print("⚠ ERROR: Faltan credenciales de SentinelHub")
+
+
+# ===============================
+# BUSCAR IMÁGENES
+# ===============================
 def buscar_imagenes(geom, fecha_ini, fecha_fin):
 
     bbox = BBox(geom.bounds, crs=4326)
-
-    from sentinelhub import SentinelHubCatalog
-
     catalog = SentinelHubCatalog(config=config)
 
-    # ===============================
-    # Filtro CQL2 JSON (correcto)
-    # ===============================
+    # Filtro CQL2 JSON
     filter_cql2_json = {
         "op": "and",
         "args": [
@@ -68,30 +61,22 @@ def buscar_imagenes(geom, fecha_ini, fecha_fin):
         ]
     }
 
-    # ===============================
-    # Buscar metadatos (solo items)
-    # ===============================
     search = catalog.search(
         collection=DataCollection.SENTINEL2_L2A,
         bbox=bbox,
         time=(fecha_ini, fecha_fin),
         filter=filter_cql2_json,
-        filter_lang="cql2-json",   # ← ← ← OBLIGATORIO
+        filter_lang="cql2-json",
         limit=20
     )
 
     items = list(search)
-
     if not items:
         return []
 
-    # Ordenar por fecha
     items_sorted = sorted(items, key=lambda x: x["properties"]["datetime"])
-    selected = items_sorted[-3:]   # max 3
+    selected = items_sorted[-3:]
 
-    # ===============================
-    # Descargar las imágenes elegidas
-    # ===============================
     evalscript = """
         function setup() {
           return {
@@ -104,10 +89,8 @@ def buscar_imagenes(geom, fecha_ini, fecha_fin):
         }
     """
 
-    results = []
-
+    resultados = []
     for item in selected:
-
         req = SentinelHubRequest(
             evalscript=evalscript,
             input_data=[
@@ -121,18 +104,16 @@ def buscar_imagenes(geom, fecha_ini, fecha_fin):
             size=bbox_to_dimensions(bbox, 10),
             config=config
         )
+        resultados.append(req.get_data())
 
-        data = req.get_data()
-        results.append(data)
+    return resultados
 
-    return results
 
-# ================================
-# CÁLCULO DE ÍNDICES VEGETATIVOS
-# ================================
+# ===============================
+# Cálculo de índices vegetativos
+# ===============================
 def calc_indices(bandas):
     B02, B03, B04, B08, B8A, B11, B12 = bandas
-
     eps = 1e-10
 
     return {
@@ -146,16 +127,15 @@ def calc_indices(bandas):
     }
 
 
-# ================================
-# HEATMAP + VALORES SOBRE LA IMAGEN
-# ================================
+# ===============================
+# Heatmap a Base64
+# ===============================
 def generar_heatmap(indice, nombre):
     plt.figure(figsize=(6,6))
     plt.imshow(indice, cmap="RdYlGn")
     plt.colorbar()
     plt.title(nombre)
 
-    # Convertir a base64 PNG
     buf = BytesIO()
     plt.savefig(buf, format="png", dpi=150)
     plt.close()
@@ -163,85 +143,57 @@ def generar_heatmap(indice, nombre):
     return base64.b64encode(buf.read()).decode()
 
 
-# ================================
-# DIAGNÓSTICO AUTOMÁTICO POR ÍNDICE
-# ================================
+# ===============================
+# Diagnóstico
+# ===============================
 def diagnostico_indice(indice, nombre):
-
     avg = float(np.nanmean(indice))
 
     if nombre == "NDVI":
-        if avg < 0.2: desc = "Vegetación muy estresada o suelo desnudo."
-        elif avg < 0.5: desc = "Vegetación moderada, crecimiento limitado."
-        else: desc = "Vegetación vigorosa y saludable."
-
+        if avg < 0.2: desc = "Vegetación muy estresada o sin cobertura."
+        elif avg < 0.5: desc = "Vegetación moderada."
+        else: desc = "Vegetación saludable."
     elif nombre == "NDMI":
-        if avg < 0.2: desc = "Humedad baja, posible estrés hídrico."
-        elif avg < 0.5: desc = "Humedad moderada."
-        else: desc = "Buena retención de humedad."
-
+        if avg < 0.2: desc = "Baja humedad."
+        elif avg < 0.5: desc = "Humedad media."
+        else: desc = "Buena humedad."
     else:
-        desc = f"Promedio del índice: {avg:.2f}. Patrón típico observado."
+        desc = f"Valor medio: {avg:.2f}"
 
     return desc
 
 
-# ================================
-# ENDPOINT PRINCIPAL DESDE TU PHP
-# ================================
+# ===============================
+# Endpoint principal
+# ===============================
 @app.post("/analizar")
 def analizar(req: Req):
     try:
-        # 1. Parseo de GeoJSON
         geo = json.loads(req.geojson)
         geom = shape(geo)
 
-        # 2. Buscar máximo 3 imágenes
         imgs = buscar_imagenes(geom, req.fecha_ini, req.fecha_fin)
         if len(imgs) == 0:
-            return {"status": "error", "msg": "No hay imágenes disponibles en el rango."}
+            return {"status": "error", "msg": "No hay imágenes disponibles."}
 
-        # Usar la mejor imagen disponible (última)
-        try:
-            img = imgs[-1][0]   # TIFF → bandas
-        except Exception as e:
-            return {"status": "error", "msg": f"Error al leer TIFF: {str(e)}"}
+        img = imgs[-1][0]  # TIFF
+        bandas = img.transpose((2, 0, 1))
 
-        # 3. Separar bandas
-        try:
-            bandas = img.transpose((2, 0, 1))
-        except Exception as e:
-            return {"status": "error", "msg": f"Error al procesar bandas: {str(e)}"}
+        indices = calc_indices(bandas)
 
-        # 4. Calcular índices
-        try:
-            indices = calc_indices(bandas)
-        except Exception as e:
-            return {"status": "error", "msg": f"Error al calcular índices: {str(e)}"}
-
-        # 5. Generar imágenes y diagnósticos
         resultados = {}
         for nombre, matriz in indices.items():
-            try:
-                resultados[nombre] = {
-                    "img_base64": generar_heatmap(matriz, nombre),
-                    "diagnostico": diagnostico_indice(matriz, nombre)
-                }
-            except Exception as e:
-                resultados[nombre] = {
-                    "img_base64": None,
-                    "diagnostico": f"Error generando heatmap: {str(e)}"
-                }
+            resultados[nombre] = {
+                "img_base64": generar_heatmap(matriz, nombre),
+                "diagnostico": diagnostico_indice(matriz, nombre)
+            }
 
-        # 6. Respuesta final al cliente PHP
-        return {
-            "status": "ok",
-            "indices": resultados
-        }
+        return {"status": "ok", "indices": resultados}
 
     except Exception as e:
-        # Error general no controlado
-        return {
-            "status": "error",
-            "msg": f"Error inesperado: {str(e)}"
-        }
+        return {"status": "error", "msg": f"Error inesperado: {str(e)}"}
+
+
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", 10000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
