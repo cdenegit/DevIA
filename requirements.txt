@@ -4,6 +4,7 @@ pydantic==2.9.2
 sentinelhub==3.10.3
 shapely==2.0.6
 rasterio==1.4.2
+reportlab==3.6.12
 numpy==1.26.4
 matplotlib==3.9.2
 requests==2.32.3
