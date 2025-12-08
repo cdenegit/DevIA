@@ -1,4 +1,5 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 import json
 import os
@@ -15,10 +16,17 @@ from io import BytesIO
 import base64
 import uvicorn
 
-# ===============================
+# ==== PDF ====
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Image, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
+
+
+# =====================================
 # FastAPI
-# ===============================
+# =====================================
 app = FastAPI()
+
 
 class Req(BaseModel):
     geojson: str
@@ -26,38 +34,27 @@ class Req(BaseModel):
     fecha_fin: str
 
 
-# ===============================
-# SentinelHub Config (OAuth2)
-# ===============================
+# =====================================
+# SentinelHub OAuth2
+# =====================================
 config = SHConfig()
-
 config.sh_client_id = "51f7ce9b-3718-4960-99b6-65f3f963611d"
 config.sh_client_secret = "CF7oglmD9yLwefP3Od30Tg8ZBuciiMmF"
 config.sh_base_url = "https://services.sentinel-hub.com"
 
-if not config.sh_client_id or not config.sh_client_secret:
-    print("⚠ ERROR: Credenciales OAuth2 incompletas.")
 
-
-# ===============================
-# BÚSQUEDA DE IMÁGENES
-# ===============================
+# =====================================
+# Búsqueda de imágenes
+# =====================================
 def buscar_imagenes(geom, fecha_ini, fecha_fin):
 
     bbox = BBox(bbox=geom.bounds, crs=CRS.WGS84)
     catalog = SentinelHubCatalog(config=config)
 
-    # Filtro CQL2 JSON
-    filter_cql2_json = {
+    filtro = {
         "op": "and",
         "args": [
-            {
-                "op": "<",
-                "args": [
-                    {"property": "eo:cloud_cover"},
-                    70
-                ]
-            }
+            {"op": "<", "args": [{"property": "eo:cloud_cover"}, 70]}
         ]
     }
 
@@ -65,27 +62,21 @@ def buscar_imagenes(geom, fecha_ini, fecha_fin):
         collection=DataCollection.SENTINEL2_L2A,
         bbox=bbox,
         time=(fecha_ini, fecha_fin),
-        filter=filter_cql2_json,
+        filter=filtro,
         filter_lang="cql2-json",
-        limit=30
+        limit=20
     )
 
     items = list(search)
-
     if not items:
         return []
 
-    # Ordenarlos por fecha
     items_sorted = sorted(items, key=lambda x: x["properties"]["datetime"])
-    selected = items_sorted[-3:]  # Las 3 más recientes
+    selected = items_sorted[-3:]
 
-    # Evalscript Sentinel-2 bandas necesarias
     evalscript = """
         function setup() {
-          return {
-            input: ["B02","B03","B04","B08","B8A","B11","B12"],
-            output: { bands: 7 }
-          };
+          return { input:["B02","B03","B04","B08","B8A","B11","B12"], output:{bands:7} };
         }
         function evaluatePixel(s) {
           return [s.B02,s.B03,s.B04,s.B08,s.B8A,s.B11,s.B12];
@@ -94,9 +85,7 @@ def buscar_imagenes(geom, fecha_ini, fecha_fin):
 
     resultados = []
     for item in selected:
-
         timestamp = item["properties"]["datetime"]
-
         req = SentinelHubRequest(
             evalscript=evalscript,
             input_data=[
@@ -110,19 +99,17 @@ def buscar_imagenes(geom, fecha_ini, fecha_fin):
             size=bbox_to_dimensions(bbox, 10),
             config=config
         )
-
         resultados.append(req.get_data())
 
     return resultados
 
 
-# ===============================
+# =====================================
 # Cálculo de índices vegetativos
-# ===============================
+# =====================================
 def calc_indices(bandas):
     B02, B03, B04, B08, B8A, B11, B12 = bandas
     eps = 1e-10
-
     return {
         "NDVI": (B08 - B04) / (B08 + B04 + eps),
         "EVI": 2.5 * (B08 - B04) / (B08 + 6*B04 - 7.5*B02 + 1 + eps),
@@ -134,11 +121,11 @@ def calc_indices(bandas):
     }
 
 
-# ===============================
+# =====================================
 # Heatmap Base64
-# ===============================
+# =====================================
 def generar_heatmap(indice, nombre):
-    plt.figure(figsize=(6,6))
+    plt.figure(figsize=(6, 6))
     plt.imshow(indice, cmap="RdYlGn")
     plt.colorbar()
     plt.title(nombre)
@@ -150,31 +137,53 @@ def generar_heatmap(indice, nombre):
     return base64.b64encode(buf.read()).decode()
 
 
-# ===============================
-# Diagnóstico simple
-# ===============================
+# =====================================
+# Diagnóstico
+# =====================================
 def diagnostico_indice(indice, nombre):
     avg = float(np.nanmean(indice))
-
     if nombre == "NDVI":
-        if avg < 0.2: desc = "Vegetación muy estresada o sin cobertura."
-        elif avg < 0.5: desc = "Vegetación moderada."
-        else: desc = "Vegetación saludable."
-
+        if avg < 0.2: return "Vegetación muy estresada o sin cobertura."
+        elif avg < 0.5: return "Vegetación moderada."
+        else: return "Vegetación saludable."
     elif nombre == "NDMI":
-        if avg < 0.2: desc = "Baja humedad."
-        elif avg < 0.5: desc = "Humedad media."
-        else: desc = "Buena humedad."
-
-    else:
-        desc = f"Valor medio: {avg:.2f}"
-
-    return desc
+        if avg < 0.2: return "Baja humedad."
+        elif avg < 0.5: return "Humedad media."
+        else: return "Buena humedad."
+    return f"Valor medio: {avg:.2f}"
 
 
-# ===============================
-# Endpoint principal
-# ===============================
+# =====================================
+# Generar PDF
+# =====================================
+def crear_pdf(indices):
+    file_path = "/tmp/diagnostico.pdf"
+    doc = SimpleDocTemplate(file_path, pagesize=letter)
+    styles = getSampleStyleSheet()
+    story = []
+
+    story.append(Paragraph("<b>Reporte de Índices Vegetativos</b>", styles['Title']))
+    story.append(Spacer(1, 20))
+
+    for nombre, data in indices.items():
+        story.append(Paragraph(f"<b>{nombre}</b>", styles['Heading2']))
+        story.append(Paragraph(data["diagnostico"], styles['BodyText']))
+
+        img_bytes = base64.b64decode(data["img_base64"])
+        img_path = f"/tmp/{nombre}.png"
+        with open(img_path, "wb") as f:
+            f.write(img_bytes)
+
+        story.append(Image(img_path, width=400, height=400))
+        story.append(Spacer(1, 20))
+
+    doc.build(story)
+    return file_path
+
+
+# =====================================
+# ENDPOINT PRINCIPAL
+# =====================================
 @app.post("/analizar")
 def analizar(req: Req):
     try:
@@ -184,26 +193,175 @@ def analizar(req: Req):
         imgs = buscar_imagenes(geom, req.fecha_ini, req.fecha_fin)
 
         if len(imgs) == 0:
-            return {"status": "error", "msg": "No se encontraron imágenes compatibles."}
+            return {"status": "error", "msg": "No se encontraron imágenes."}
 
-        img = imgs[-1][0]  # TIFF (H, W, 7 bandas)
-        bandas = img.transpose((2, 0, 1))  # -> (7, H, W)
+        bandas = imgs[-1][0].transpose((2, 0, 1))
+        indices_raw = calc_indices(bandas)
 
-        indices = calc_indices(bandas)
-
-        resultados = {}
-        for nombre, matriz in indices.items():
-            resultados[nombre] = {
+        indices = {}
+        for nombre, matriz in indices_raw.items():
+            indices[nombre] = {
                 "img_base64": generar_heatmap(matriz, nombre),
                 "diagnostico": diagnostico_indice(matriz, nombre)
             }
 
-        return {"status": "ok", "indices": resultados}
+        return {"status": "ok", "indices": indices}
 
     except Exception as e:
-        return {"status": "error", "msg": f"Error inesperado: {str(e)}"}
+        return {"status": "error", "msg": str(e)}
 
 
+# =====================================
+# Endpoint PDF
+# =====================================
+@app.post("/pdf")
+def pdf(req: Req):
+    result = analizar(req)
+
+    if result["status"] != "ok":
+        return result
+
+    file_path = crear_pdf(result["indices"])
+    with open(file_path, "rb") as f:
+        pdf_bytes = f.read()
+
+    return Response(content=pdf_bytes, media_type="application/pdf")
+
+
+# =====================================
+# Endpoint Dashboard
+# =====================================
+@app.post("/dashboard")
+def dashboard(req: Req):
+    result = analizar(req)
+    if result["status"] != "ok":
+        return result
+
+    html = generar_dashboard(
+        result["indices"],
+        req.geojson,
+        req.fecha_ini,
+        req.fecha_fin
+    )
+
+    return HTMLResponse(content=html)
+
+
+# =====================================
+# Server
+# =====================================
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 10000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
+    
+# =====================================
+# Dashboard HTML con Bootstrap 5
+# =====================================
+def generar_dashboard(indices, geojson, fecha_ini, fecha_fin):
+
+    html = f"""
+    <!DOCTYPE html>
+    <html lang='es'>
+    <head>
+        <meta charset='UTF-8'>
+        <meta name='viewport' content='width=device-width, initial-scale=1'>
+        <title>Dashboard de Índices</title>
+
+        <!-- Bootstrap 5 -->
+        <link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css' rel='stylesheet'>
+
+        <!-- Leaflet -->
+        <link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'>
+        <script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script>
+
+        <style>
+            #map {{
+                height: 350px;
+                border-radius: 12px;
+                margin-bottom: 20px;
+            }}
+        </style>
+    </head>
+
+    <body class='bg-light'>
+        <div class='container py-4'>
+
+            <div class='d-flex justify-content-between align-items-center mb-4'>
+                <h1 class=''>Dashboard de Índices Vegetativos</h1>
+
+                <button class='btn btn-danger btn-lg'
+                    onclick="descargarPDF()">
+                    📄 Descargar PDF
+                </button>
+            </div>
+
+            <!-- MAPA -->
+            <div id='map'></div>
+
+            <div class='row g-4'>
+    """
+
+    for nombre, data in indices.items():
+        html += f"""
+        <div class='col-12 col-md-6 col-lg-4'>
+            <div class='card shadow'>
+                <img src='data:image/png;base64,{data["img_base64"]}' 
+                     class='card-img-top img-fluid' alt='{nombre}'>
+
+                <div class='card-body'>
+                    <h5 class='card-title'>{nombre}</h5>
+                    <p class='card-text'>{data["diagnostico"]}</p>
+                </div>
+            </div>
+        </div>
+        """
+
+    html += f"""
+            </div>
+        </div>
+
+        <script>
+            var map = L.map('map');
+
+            L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+                maxZoom: 19
+            }}).addTo(map);
+
+            var geo = {geojson};
+
+            var capa = L.geoJSON(geo, {{
+                style: {{
+                    color: 'red',
+                    weight: 2,
+                    fillOpacity: 0.1
+                }}
+            }}).addTo(map);
+
+            map.fitBounds(capa.getBounds());
+            
+            function descargarPDF() {{
+                fetch('/pdf', {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{
+                        geojson: JSON.stringify(geo),
+                        fecha_ini: "{fecha_ini}",
+                        fecha_fin: "{fecha_fin}"
+                    }})
+                }})
+                .then(resp => resp.blob())
+                .then(blob => {{
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = "diagnostico.pdf";
+                    a.click();
+                }});
+            }}
+        </script>
+
+    </body>
+    </html>
+    """
+
+    return html
+
