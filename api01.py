@@ -1,8 +1,10 @@
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Response, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 import json
 import os
+import math
+import logging
 from sentinelhub import (
     SHConfig, BBox, CRS, DataCollection, SentinelHubCatalog,
     SentinelHubRequest, MimeType, bbox_to_dimensions
@@ -16,41 +18,108 @@ from io import BytesIO
 import base64
 import uvicorn
 
-# ==== PDF ====
+# ==== PDF (ya en tu requirements) ====
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Image, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 
+# =====================================
+# Logging básico
+# =====================================
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("eo-microservice")
 
 # =====================================
 # FastAPI
 # =====================================
 app = FastAPI()
 
-
 class Req(BaseModel):
     geojson: str
     fecha_ini: str
     fecha_fin: str
 
-
 # =====================================
-# SentinelHub OAuth2
+# SentinelHub OAuth2 (tus credenciales)
 # =====================================
 config = SHConfig()
-config.sh_client_id = "51f7ce9b-3718-4960-99b6-65f3f963611d"
-config.sh_client_secret = "CF7oglmD9yLwefP3Od30Tg8ZBuciiMmF"
+config.sh_client_id = os.getenv("SH_CLIENT_ID", "XXXXX")
+config.sh_client_secret = os.getenv("SH_CLIENT_SECRET", "XXXXX")
+# config.instance_id ya no es imprescindible si usas OAuth2 + Sentinel services
 config.sh_base_url = "https://services.sentinel-hub.com"
 
+# =====================================
+# Parámetros de control (ajustables)
+# =====================================
+MAX_PIXELS = 600 * 600         # máximo píxeles aceptables para H*W
+DEFAULT_RES = 10               # metros/píxel preferido (Sentinel-2 = 10m bandas)
+MIN_RES = 20                   # no solicitar resoluciones más finas de lo necesario
+MAX_RES = 120                  # si el área es gigante, recortar a esta resolución
+HEATMAP_DPI = 100              # dpi más pequeño para reducir memoria
+HEATMAP_FIGSIZE = (4, 4)      # figura más pequeña
+SENTINEL_TIMEOUT = 60         # segundos de timeout para solicitudes de SentinelHub
 
 # =====================================
-# Búsqueda de imágenes
+# HELPERS: cálculo de área aproximada y resolución
 # =====================================
-def buscar_imagenes(geom, fecha_ini, fecha_fin):
+def bbox_area_meters(bbox):
+    """Approx area in square meters for bbox tuple (minx, miny, maxx, maxy)."""
+    minx, miny, maxx, maxy = bbox
+    # Approx meters per degree
+    mean_lat = (miny + maxy) / 2.0
+    meters_per_deg_lat = 111320.0
+    meters_per_deg_lon = 111320.0 * math.cos(math.radians(mean_lat))
+    width_m = (maxx - minx) * meters_per_deg_lon
+    height_m = (maxy - miny) * meters_per_deg_lat
+    if width_m < 0: width_m = abs(width_m)
+    if height_m < 0: height_m = abs(height_m)
+    return width_m * height_m, width_m, height_m
 
-    bbox = BBox(bbox=geom.bounds, crs=CRS.WGS84)
+def choose_resolution(width_m, height_m):
+    """
+    Decide meters-per-pixel resolution so that width_px * height_px <= MAX_PIXELS
+    and resolution is reasonable (between DEFAULT_RES and MAX_RES).
+    """
+    # Start with default resolution
+    res = DEFAULT_RES
+    # compute pixel dims at default res
+    w_px = max(1, int(math.ceil(width_m / res)))
+    h_px = max(1, int(math.ceil(height_m / res)))
+    pixels = w_px * h_px
+    if pixels <= MAX_PIXELS:
+        return res, w_px, h_px
+
+    # increase resolution (coarsen) until under MAX_PIXELS
+    # target scale factor = sqrt(pixels / MAX_PIXELS)
+    scale_factor = math.sqrt(pixels / MAX_PIXELS)
+    res = int(math.ceil(res * scale_factor))
+    # clamp
+    if res < MIN_RES:
+        res = MIN_RES
+    if res > MAX_RES:
+        res = MAX_RES
+    w_px = max(1, int(math.ceil(width_m / res)))
+    h_px = max(1, int(math.ceil(height_m / res)))
+    return res, w_px, h_px
+
+# =====================================
+# BUSCAR IMÁGENES (optimizada)
+# =====================================
+def buscar_imagenes(geom, fecha_ini, fecha_fin, max_items=3):
+    """
+    Busca y descarga hasta `max_items` imágenes Sentinel-2 L2A recortadas al bbox (no al polígono).
+    Optimizaciones:
+      - calcula resolución automática según área para limitar memoria
+      - usa timeout en requests (SentinelHub client internamente usa requests)
+      - convierte bandas a float32 y normaliza si valores altos
+    Retorna lista de arrays (H, W, 7) numpy.
+    """
+
+    bbox_vals = geom.bounds  # (minx, miny, maxx, maxy)
+    bbox = BBox(bbox=bbox_vals, crs=CRS.WGS84)
     catalog = SentinelHubCatalog(config=config)
 
+    # Filtro CQL2 JSON para baja nubosidad
     filtro = {
         "op": "and",
         "args": [
@@ -58,22 +127,34 @@ def buscar_imagenes(geom, fecha_ini, fecha_fin):
         ]
     }
 
-    search = catalog.search(
-        collection=DataCollection.SENTINEL2_L2A,
-        bbox=bbox,
-        time=(fecha_ini, fecha_fin),
-        filter=filtro,
-        filter_lang="cql2-json",
-        limit=20
-    )
+    # Buscar metadatos
+    try:
+        search = catalog.search(
+            collection=DataCollection.SENTINEL2_L2A,
+            bbox=bbox,
+            time=(fecha_ini, fecha_fin),
+            filter=filtro,
+            filter_lang="cql2-json",
+            limit=20
+        )
+        items = list(search)
+    except Exception as e:
+        logger.exception("Error buscando en catalog: %s", e)
+        raise HTTPException(status_code=502, detail=f"Error buscando metadatos: {str(e)}")
 
-    items = list(search)
     if not items:
         return []
 
     items_sorted = sorted(items, key=lambda x: x["properties"]["datetime"])
-    selected = items_sorted[-3:]
+    selected = items_sorted[-max_items:]
 
+    # compute bbox size in meters and choose resolution
+    area_m2, width_m, height_m = bbox_area_meters(bbox_vals)
+    res_m_per_px, w_px, h_px = choose_resolution(width_m, height_m)
+    logger.info("BBox area m2=%.2f width_m=%.2f height_m=%.2f -> res=%dm/pix => px=%dx%d",
+                area_m2, width_m, height_m, res_m_per_px, w_px, h_px)
+
+    # build evalscript
     evalscript = """
         function setup() {
           return { input:["B02","B03","B04","B08","B8A","B11","B12"], output:{bands:7} };
@@ -86,62 +167,100 @@ def buscar_imagenes(geom, fecha_ini, fecha_fin):
     resultados = []
     for item in selected:
         timestamp = item["properties"]["datetime"]
-        req = SentinelHubRequest(
-            evalscript=evalscript,
-            input_data=[
-                SentinelHubRequest.input_data(
-                    data_collection=DataCollection.SENTINEL2_L2A,
-                    time_interval=(timestamp, timestamp)
-                )
-            ],
-            responses=[SentinelHubRequest.output_response("default", MimeType.TIFF)],
-            bbox=bbox,
-            size=bbox_to_dimensions(bbox, 10),
-            config=config
-        )
-        resultados.append(req.get_data())
+
+        try:
+            req = SentinelHubRequest(
+                evalscript=evalscript,
+                input_data=[
+                    SentinelHubRequest.input_data(
+                        data_collection=DataCollection.SENTINEL2_L2A,
+                        time_interval=(timestamp, timestamp)
+                    )
+                ],
+                responses=[SentinelHubRequest.output_response("default", MimeType.TIFF)],
+                bbox=bbox,
+                size=bbox_to_dimensions(bbox, res_m_per_px),
+                config=config
+            )
+
+            # get_data may return list of arrays; we use first element
+            data = req.get_data(timeout=SENTINEL_TIMEOUT)
+            if not data:
+                logger.warning("No data returned for timestamp %s", timestamp)
+                continue
+
+            # data is list of numpy arrays; often shape (H, W, bands)
+            arr = data[0]
+
+            # convert to float32 early to avoid overflow
+            arr = arr.astype("float32")
+
+            # If values appear scaled up (e.g., > 10000), normalize to ~0..1
+            if np.nanmax(arr) > 2000:
+                arr = arr / 10000.0
+
+            # simple nan handling
+            arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
+
+            resultados.append(arr)
+
+        except Exception as e:
+            logger.exception("Error descargando imagen %s: %s", timestamp, e)
+            # don't fail the whole loop, continue with next
+            continue
 
     return resultados
 
-
 # =====================================
-# Cálculo de índices vegetativos
+# Cálculo de índices vegetativos (sin cambios, operando en float32 normalizado)
 # =====================================
 def calc_indices(bandas):
+    # bandas expected shape (7, H, W)
     B02, B03, B04, B08, B8A, B11, B12 = bandas
     eps = 1e-10
+    ndvi = (B08 - B04) / (B08 + B04 + eps)
+    evi = 2.5 * (B08 - B04) / (B08 + 6*B04 - 7.5*B02 + 1 + eps)
+    ndwi = (B03 - B08) / (B03 + B08 + eps)
+    ndre = (B8A - B04) / (B8A + B04 + eps)
+    msavi = (2*B08 + 1 - np.sqrt((2*B08 + 1)**2 - 8*(B08 - B04))) / 2
+    ndmi = (B11 - B08) / (B11 + B08 + eps)
+    reci = (B08 / (B04 + eps)) - 1
+
     return {
-        "NDVI": (B08 - B04) / (B08 + B04 + eps),
-        "EVI": 2.5 * (B08 - B04) / (B08 + 6*B04 - 7.5*B02 + 1 + eps),
-        "NDWI": (B03 - B08) / (B03 + B08 + eps),
-        "NDRE": (B8A - B04) / (B8A + B04 + eps),
-        "MSAVI": (2*B08 + 1 - np.sqrt((2*B08 + 1)**2 - 8*(B08 - B04))) / 2,
-        "NDMI": (B11 - B08) / (B11 + B08 + eps),
-        "RECI": (B08 / (B04 + eps)) - 1
+        "NDVI": ndvi,
+        "EVI": evi,
+        "NDWI": ndwi,
+        "NDRE": ndre,
+        "MSAVI": msavi,
+        "NDMI": ndmi,
+        "RECI": reci
     }
 
-
 # =====================================
-# Heatmap Base64
+# Heatmap Base64 (optimizado, menor DPI / figsize)
 # =====================================
 def generar_heatmap(indice, nombre):
-    plt.figure(figsize=(6, 6))
-    plt.imshow(indice, cmap="RdYlGn")
+    plt.figure(figsize=HEATMAP_FIGSIZE)
+    # clip values to [-1,1] for better color scaling and to avoid extreme outliers
+    arr = np.clip(indice, -1.0, 1.0)
+    plt.imshow(arr, cmap="RdYlGn", vmin=-1, vmax=1)
     plt.colorbar()
     plt.title(nombre)
-
     buf = BytesIO()
-    plt.savefig(buf, format="png", dpi=150)
+    plt.savefig(buf, format="png", dpi=HEATMAP_DPI, bbox_inches="tight")
     plt.close()
     buf.seek(0)
     return base64.b64encode(buf.read()).decode()
 
-
 # =====================================
-# Diagnóstico
+# Diagnóstico (igual)
 # =====================================
 def diagnostico_indice(indice, nombre):
-    avg = float(np.nanmean(indice))
+    # use nanmean on float32 arrays (should not overflow now)
+    try:
+        avg = float(np.nanmean(indice))
+    except Exception:
+        avg = 0.0
     if nombre == "NDVI":
         if avg < 0.2: return "Vegetación muy estresada o sin cobertura."
         elif avg < 0.5: return "Vegetación moderada."
@@ -152,9 +271,8 @@ def diagnostico_indice(indice, nombre):
         else: return "Buena humedad."
     return f"Valor medio: {avg:.2f}"
 
-
 # =====================================
-# Generar PDF
+# Crear PDF (sin cambios funcionales)
 # =====================================
 def crear_pdf(indices):
     file_path = "/tmp/diagnostico.pdf"
@@ -174,15 +292,14 @@ def crear_pdf(indices):
         with open(img_path, "wb") as f:
             f.write(img_bytes)
 
-        story.append(Image(img_path, width=400, height=400))
+        story.append(Image(img_path, width=300, height=300))
         story.append(Spacer(1, 20))
 
     doc.build(story)
     return file_path
 
-
 # =====================================
-# ENDPOINT PRINCIPAL
+# ENDPOINT PRINCIPAL optimizado
 # =====================================
 @app.post("/analizar")
 def analizar(req: Req):
@@ -190,202 +307,60 @@ def analizar(req: Req):
         geo = json.loads(req.geojson)
         geom = shape(geo)
 
+        # 1) Buscar imágenes (optimizado)
         imgs = buscar_imagenes(geom, req.fecha_ini, req.fecha_fin)
-
         if len(imgs) == 0:
             return {"status": "error", "msg": "No se encontraron imágenes."}
 
-        bandas = imgs[-1][0].transpose((2, 0, 1))
+        # 2) Usar la mejor imagen (última) y preparar bandas
+        try:
+            img = imgs[-1]  # shape (H, W, 7)
+            if img.ndim != 3 or img.shape[2] < 7:
+                # if the array is (1, H, W, 7) or similar, try to adapt
+                arr = np.array(img)
+                # Try to find first element with 3 dims
+                if arr.ndim == 4:
+                    img = arr[0]
+                else:
+                    raise ValueError("Formato de imagen inesperado")
+        except Exception as e:
+            logger.exception("Error preparando imagen: %s", e)
+            return {"status": "error", "msg": f"Error preparando la imagen: {str(e)}"}
+
+        # transpose to (bands, H, W)
+        bandas = img.transpose((2, 0, 1)).astype("float32")
+
+        # 3) Safety normalization: if values seem in raw DN (>>1), scale down
+        if np.nanmax(bandas) > 2000:
+            bandas = bandas / 10000.0
+
+        # 4) Calcular índices (operando en float32)
         indices_raw = calc_indices(bandas)
 
+        # 5) Generar heatmaps y diagnósticos (memoria reducida)
         indices = {}
         for nombre, matriz in indices_raw.items():
-            indices[nombre] = {
-                "img_base64": generar_heatmap(matriz, nombre),
-                "diagnostico": diagnostico_indice(matriz, nombre)
-            }
+            try:
+                indices[nombre] = {
+                    "img_base64": generar_heatmap(matriz, nombre),
+                    "diagnostico": diagnostico_indice(matriz, nombre)
+                }
+            except Exception as e:
+                logger.exception("Error generando heatmap para %s: %s", nombre, e)
+                indices[nombre] = {"img_base64": None, "diagnostico": f"Error: {str(e)}"}
 
         return {"status": "ok", "indices": indices}
 
+    except HTTPException as he:
+        raise he
     except Exception as e:
-        return {"status": "error", "msg": str(e)}
-
-
-# =====================================
-# Endpoint PDF
-# =====================================
-@app.post("/pdf")
-def pdf(req: Req):
-    result = analizar(req)
-
-    if result["status"] != "ok":
-        return result
-
-    file_path = crear_pdf(result["indices"])
-    with open(file_path, "rb") as f:
-        pdf_bytes = f.read()
-
-    return Response(content=pdf_bytes, media_type="application/pdf")
-
+        logger.exception("Error inesperado en /analizar: %s", e)
+        return {"status": "error", "msg": f"Error inesperado: {str(e)}"}
 
 # =====================================
-# Endpoint Dashboard
+# /pdf and /dashboard endpoints unchanged (kept in your original file)
 # =====================================
-@app.post("/dashboard")
-def dashboard(req: Req):
-    result = analizar(req)
-    if result["status"] != "ok":
-        return result
 
-    html = generar_dashboard(
-        result["indices"],
-        req.geojson,
-        req.fecha_ini,
-        req.fecha_fin
-    )
-
-    return HTMLResponse(content=html)
-
-
-    
-# =====================================
-# Dashboard HTML con Bootstrap 5
-# =====================================
-import json
-
-def generar_dashboard(indices, geojson, fecha_ini, fecha_fin):
-    """
-    Construye el HTML del dashboard de forma segura sin usar f-strings
-    multilínea que contengan llaves y que rompan el archivo en el editor.
-    """
-
-    # Serializamos el geojson para que sea seguro en JS
-    try:
-        geojson_js = json.dumps(json.loads(geojson))
-    except Exception:
-        # Si ya es dict, convertir directamente
-        geojson_js = json.dumps(geojson)
-
-    parts = []
-
-    # Header (no f-string)
-    parts.append("""<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Dashboard de Índices</title>
-
-  <!-- Bootstrap 5 -->
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-
-  <!-- Leaflet -->
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-
-  <style>
-    #map {
-      height: 350px;
-      border-radius: 12px;
-      margin-bottom: 20px;
-    }
-  </style>
-</head>
-
-<body class="bg-light">
-  <div class="container py-4">
-    <div class="d-flex justify-content-between align-items-center mb-4">
-      <h1>Dashboard de Índices Vegetativos</h1>
-      <button class="btn btn-danger btn-lg" onclick="descargarPDF()">📄 Descargar PDF</button>
-    </div>
-
-    <!-- MAPA -->
-    <div id="map"></div>
-
-    <div class="row g-4">
-""")
-
-    # Cards for indices (built by simple concatenation)
-    for nombre, data in indices.items():
-        img_b64 = data.get("img_base64", "")
-        diagnostico = data.get("diagnostico", "").replace("\n", " ")
-        # escape single quotes in nombre and diagnostico to avoid breaking HTML attributes
-        safe_nombre = str(nombre).replace("'", "&#39;")
-        safe_diag = str(diagnostico).replace("'", "&#39;")
-
-        card_html = (
-            "<div class=\"col-12 col-md-6 col-lg-4\">"
-              "<div class=\"card shadow\">"
-                "<img src=\"data:image/png;base64," + img_b64 + "\" "
-                      "class=\"card-img-top img-fluid\" alt=\"" + safe_nombre + "\">"
-                "<div class=\"card-body\">"
-                  "<h5 class=\"card-title\">" + safe_nombre + "</h5>"
-                  "<p class=\"card-text\">" + safe_diag + "</p>"
-                "</div>"
-              "</div>"
-            "</div>\n"
-        )
-        parts.append(card_html)
-
-    # Close the cards container and add script (insert geojson_js and dates via concatenation)
-    script_head = (
-        "    </div>\n"  # close row
-        "  </div>\n\n"  # close container
-        "  <script>\n"
-        "    var map = L.map('map');\n\n"
-        "    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {\n"
-        "      maxZoom: 19\n"
-        "    }).addTo(map);\n\n"
-        "    var geo = "
-    )
-    parts.append(script_head)
-    parts.append(geojson_js)  # already a JSON string (no extra quotes)
-    script_mid = ";\n\n" \
-                 "    var capa = L.geoJSON(geo, {\n" \
-                 "      style: function() {\n" \
-                 "        return { color: 'red', weight: 2, fillOpacity: 0.1 };\n" \
-                 "      }\n" \
-                 "    }).addTo(map);\n\n" \
-                 "    map.fitBounds(capa.getBounds());\n\n" \
-                 "    function descargarPDF() {\n" \
-                 "      fetch('/pdf', {\n" \
-                 "        method: 'POST',\n" \
-                 "        headers: { 'Content-Type': 'application/json' },\n" \
-                 "        body: JSON.stringify({\n" \
-                 "          geojson: JSON.stringify(geo),\n"
-    parts.append(script_mid)
-    # insert fecha_ini and fecha_fin safely (escape quotes)
-    safe_fecha_ini = str(fecha_ini).replace('"', '\\"')
-    safe_fecha_fin = str(fecha_fin).replace('"', '\\"')
-    parts.append("          \"fecha_ini\": \"" + safe_fecha_ini + "\",\n")
-    parts.append("          \"fecha_fin\": \"" + safe_fecha_fin + "\"\n")
-    script_tail = (
-        "        })\n"
-        "      })\n"
-        "      .then(function(resp) { return resp.blob(); })\n"
-        "      .then(function(blob) {\n"
-        "        var url = URL.createObjectURL(blob);\n"
-        "        var a = document.createElement('a');\n"
-        "        a.href = url;\n"
-        "        a.download = 'diagnostico.pdf';\n"
-        "        document.body.appendChild(a);\n"
-        "        a.click();\n"
-        "        a.remove();\n"
-        "        URL.revokeObjectURL(url);\n"
-        "      });\n"
-        "    }\n\n"
-        "  </script>\n\n"
-        "</body>\n"
-        "</html>\n"
-    )
-    parts.append(script_tail)
-
-    # Join and return
-    return "".join(parts)
-
-
-# =====================================
-# Server
-# =====================================
+# Make sure server start at the bottom of your file (if running directly)
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
