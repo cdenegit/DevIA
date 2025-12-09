@@ -43,8 +43,8 @@ class Req(BaseModel):
 # SentinelHub OAuth2 (tus credenciales)
 # =====================================
 config = SHConfig()
-config.sh_client_id = os.getenv("SH_CLIENT_ID", "XXXXX")
-config.sh_client_secret = os.getenv("SH_CLIENT_SECRET", "XXXXX")
+config.sh_client_id = os.getenv("SH_CLIENT_ID", "51f7ce9b-3718-4960-99b6-65f3f963611d")
+config.sh_client_secret = os.getenv("SH_CLIENT_SECRET", "CF7oglmD9yLwefP3Od30Tg8ZBuciiMmF")
 # config.instance_id ya no es imprescindible si usas OAuth2 + Sentinel services
 config.sh_base_url = "https://services.sentinel-hub.com"
 
