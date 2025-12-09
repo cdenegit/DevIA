@@ -9,7 +9,7 @@ from sentinelhub import (
     SHConfig, BBox, CRS, DataCollection, SentinelHubCatalog,
     SentinelHubRequest, MimeType, bbox_to_dimensions
 )
-from shapely.geometry import shape
+from shapely.geometry import shape, mapping
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
@@ -299,45 +299,70 @@ def crear_pdf(indices):
     return file_path
 
 # =====================================
-# ENDPOINT PRINCIPAL optimizado
+# ENDPOINT PRINCIPAL optimizado + FIX SHAPELY
 # =====================================
 @app.post("/analizar")
 def analizar(req: Req):
     try:
+        # ================================
+        # 1) Leer GeoJSON enviado desde PHP
+        # ================================
         geo = json.loads(req.geojson)
         geom = shape(geo)
 
-        # 1) Buscar imágenes (optimizado)
+        # ================================
+        # 2) Corrección OGC obligatoria (SELF-INTERSECTIONS, BOWTIES, HOLES)
+        # ================================
+        try:
+            if not geom.is_valid:
+                geom = geom.buffer(0)   # ← FIX GEOMETRÍA
+        except Exception as gerr:
+            return {
+                "status": "error",
+                "msg": f"Error corrigiendo geometría: {str(gerr)}"
+            }
+
+        # ================================
+        # 3) Buscar imágenes
+        # ================================
         imgs = buscar_imagenes(geom, req.fecha_ini, req.fecha_fin)
+
         if len(imgs) == 0:
             return {"status": "error", "msg": "No se encontraron imágenes."}
 
-        # 2) Usar la mejor imagen (última) y preparar bandas
+        # ================================
+        # 4) Tomar la mejor imagen
+        # ================================
         try:
-            img = imgs[-1]  # shape (H, W, 7)
+            img = imgs[-1]  # Última imagen temporal
+
+            # Adaptar formato si viene en (1, H, W, 7)
+            arr = np.array(img)
+            if arr.ndim == 4:
+                img = arr[0]
+
             if img.ndim != 3 or img.shape[2] < 7:
-                # if the array is (1, H, W, 7) or similar, try to adapt
-                arr = np.array(img)
-                # Try to find first element with 3 dims
-                if arr.ndim == 4:
-                    img = arr[0]
-                else:
-                    raise ValueError("Formato de imagen inesperado")
+                raise ValueError("Formato de imagen inesperado")
+
         except Exception as e:
             logger.exception("Error preparando imagen: %s", e)
             return {"status": "error", "msg": f"Error preparando la imagen: {str(e)}"}
 
-        # transpose to (bands, H, W)
+        # Convertir a (bands, H, W)
         bandas = img.transpose((2, 0, 1)).astype("float32")
 
-        # 3) Safety normalization: if values seem in raw DN (>>1), scale down
+        # Normalización automática si vienen en DN
         if np.nanmax(bandas) > 2000:
             bandas = bandas / 10000.0
 
-        # 4) Calcular índices (operando en float32)
+        # ================================
+        # 5) Calcular índices
+        # ================================
         indices_raw = calc_indices(bandas)
 
-        # 5) Generar heatmaps y diagnósticos (memoria reducida)
+        # ================================
+        # 6) Heatmaps + diagnósticos
+        # ================================
         indices = {}
         for nombre, matriz in indices_raw.items():
             try:
@@ -347,15 +372,26 @@ def analizar(req: Req):
                 }
             except Exception as e:
                 logger.exception("Error generando heatmap para %s: %s", nombre, e)
-                indices[nombre] = {"img_base64": None, "diagnostico": f"Error: {str(e)}"}
+                indices[nombre] = {
+                    "img_base64": None,
+                    "diagnostico": f"Error generando índice: {str(e)}"
+                }
 
-        return {"status": "ok", "indices": indices}
+        # ================================
+        # 7) Respuesta final
+        # ================================
+        return {
+            "status": "ok",
+            "indices": indices
+        }
 
-    except HTTPException as he:
-        raise he
     except Exception as e:
         logger.exception("Error inesperado en /analizar: %s", e)
-        return {"status": "error", "msg": f"Error inesperado: {str(e)}"}
+        return {
+            "status": "error",
+            "msg": f"Error inesperado: {str(e)}"
+        }
+
 
 # =====================================
 # /pdf and /dashboard endpoints unchanged (kept in your original file)
