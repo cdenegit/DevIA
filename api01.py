@@ -43,10 +43,12 @@ class Req(BaseModel):
 # SentinelHub OAuth2 (tus credenciales)
 # =====================================
 config = SHConfig()
+config.download_timeout_seconds = 150  # ejemplo
 config.sh_client_id = os.getenv("SH_CLIENT_ID", "51f7ce9b-3718-4960-99b6-65f3f963611d")
 config.sh_client_secret = os.getenv("SH_CLIENT_SECRET", "CF7oglmD9yLwefP3Od30Tg8ZBuciiMmF")
 # config.instance_id ya no es imprescindible si usas OAuth2 + Sentinel services
 config.sh_base_url = "https://services.sentinel-hub.com"
+client = SentinelHubDownloadClient(config=config)
 
 # =====================================
 # Parámetros de control (ajustables)
@@ -171,6 +173,10 @@ def buscar_imagenes(geom, fecha_ini, fecha_fin, max_items=3):
         try:
             req = SentinelHubRequest(
                 evalscript=evalscript,
+                responses=responses,
+                bbox=bbox,
+                size=size,
+                config=config,                
                 input_data=[
                     SentinelHubRequest.input_data(
                         data_collection=DataCollection.SENTINEL2_L2A,
