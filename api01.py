@@ -172,10 +172,13 @@ def buscar_imagenes(geom, fecha_ini, fecha_fin, max_items=3):
         try:
             req = SentinelHubRequest(
                 evalscript=evalscript,
-                responses=responses,
+                responses=[SentinelHubRequest.output_response("default", MimeType.TIFF)],
                 bbox=bbox,
-                size=size,
-                input_data=input_data,
+                size=bbox_to_dimensions(bbox, res_m_per_px),
+                input_data=[SentinelHubRequest.input_data(
+                        data_collection=DataCollection.SENTINEL2_L2A,
+                        time_interval=(timestamp, timestamp)
+                    )],
                 config=config 
             )
 
