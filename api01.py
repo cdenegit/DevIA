@@ -176,17 +176,8 @@ def buscar_imagenes(geom, fecha_ini, fecha_fin, max_items=3):
                 responses=responses,
                 bbox=bbox,
                 size=size,
-                config=config,                
-                input_data=[
-                    SentinelHubRequest.input_data(
-                        data_collection=DataCollection.SENTINEL2_L2A,
-                        time_interval=(timestamp, timestamp)
-                    )
-                ],
-                responses=[SentinelHubRequest.output_response("default", MimeType.TIFF)],
-                bbox=bbox,
-                size=bbox_to_dimensions(bbox, res_m_per_px),
-                config=config
+                input_data=input_data,
+                config=config 
             )
 
             # get_data may return list of arrays; we use first element
