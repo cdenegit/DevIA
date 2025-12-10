@@ -115,9 +115,15 @@ def buscar_imagenes(geom, fecha_ini, fecha_fin, max_items=3):
       - convierte bandas a float32 y normaliza si valores altos
     Retorna lista de arrays (H, W, 7) numpy.
     """
+    logger.info("fecha_ini: %s", fecha_ini)
+    logger.info("fecha_fin: %s", fecha_fin)
 
+
+    
     bbox_vals = geom.bounds  # (minx, miny, maxx, maxy)
     bbox = BBox(bbox=bbox_vals, crs=CRS.WGS84)
+
+    logger.info("bbox_vals: %s", bbox_vals)
     catalog = SentinelHubCatalog(config=config)
 
     # Filtro CQL2 JSON para baja nubosidad
@@ -139,6 +145,7 @@ def buscar_imagenes(geom, fecha_ini, fecha_fin, max_items=3):
             limit=20
         )
         items = list(search)
+        logger.info("items encontrados en catálogo: %d", len(items))
     except Exception as e:
         logger.exception("Error buscando en catalog: %s", e)
         raise HTTPException(status_code=502, detail=f"Error buscando metadatos: {str(e)}")
@@ -201,7 +208,7 @@ def buscar_imagenes(geom, fecha_ini, fecha_fin, max_items=3):
             # simple nan handling
             arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
 
-            resultados.append(arr)
+            return [arr]
 
         except Exception as e:
             logger.exception("Error descargando imagen %s: %s", timestamp, e)
