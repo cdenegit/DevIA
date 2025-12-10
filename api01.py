@@ -190,7 +190,7 @@ def buscar_imagenes(geom, fecha_ini, fecha_fin, max_items=3):
             )
 
             # get_data may return list of arrays; we use first element
-            data = req.get_data(timeout=SENTINEL_TIMEOUT)
+            data = req.get_data()
             if not data:
                 logger.warning("No data returned for timestamp %s", timestamp)
                 continue
