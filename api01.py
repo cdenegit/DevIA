@@ -113,20 +113,33 @@ def choose_resolution(width_m, height_m):
     return res, w_px, h_px
 
 # =====================================
-# BUSCAR IMÁGENES (optimizada)
+# BUSCAR IMÁGENES (optimizada - versión de producción)
 # =====================================
 def buscar_imagenes(geom, fecha_ini, fecha_fin, max_items=3):
-
+    """
+    Busca y descarga hasta `max_items` imágenes Sentinel-2 L2A recortadas al bbox (no al polígono).
+    Devuelve lista con la primera imagen válida encontrada: [arr] donde arr es numpy array (H, W, bands).
+    Si no encuentra ninguna, devuelve [].
+    """
+    # Logs iniciales
     logger.info("fecha_ini: %s", fecha_ini)
     logger.info("fecha_fin: %s", fecha_fin)
+    try:
+        max_items = int(max_items)
+    except Exception:
+        max_items = 3
+    if max_items <= 0:
+        max_items = 1
     logger.info("max_items recibido: %s", max_items)
 
+    # bbox a partir de la geometría
     bbox_vals = geom.bounds
+    bbox = BBox(bbox=bbox_vals, crs=CRS.WGS84)
     logger.info("bbox_vals: %s", bbox_vals)
 
-    bbox = BBox(bbox=bbox_vals, crs=CRS.WGS84)
     catalog = SentinelHubCatalog(config=config)
 
+    # filtro CQL2 para nubosidad
     filtro = {
         "op": "and",
         "args": [
@@ -134,6 +147,7 @@ def buscar_imagenes(geom, fecha_ini, fecha_fin, max_items=3):
         ]
     }
 
+    # Buscar metadatos en el catálogo
     try:
         search = catalog.search(
             collection=DataCollection.SENTINEL2_L2A,
@@ -153,23 +167,22 @@ def buscar_imagenes(geom, fecha_ini, fecha_fin, max_items=3):
         logger.warning("No se encontraron items dentro del rango solicitado.")
         return []
 
+    # ordenar y seleccionar últimos max_items
     items_sorted = sorted(items, key=lambda x: x["properties"]["datetime"])
     selected = items_sorted[-max_items:]
-
     logger.info("items seleccionados: %d", len(selected))
 
     if not selected:
-        logger.warning("selected está vacío. Posible problema con max_items.")
+        logger.warning("selected está vacío aunque hay items. Revisar max_items.")
         return []
 
+    # calcular resolución óptima
     area_m2, width_m, height_m = bbox_area_meters(bbox_vals)
     res_m_per_px, w_px, h_px = choose_resolution(width_m, height_m)
+    logger.info("BBox area m2=%.2f width_m=%.2f height_m=%.2f -> res=%dm/pix => px=%dx%d",
+                area_m2, width_m, height_m, res_m_per_px, w_px, h_px)
 
-    logger.info(
-        "BBox area m2=%.2f width_m=%.2f height_m=%.2f -> res=%dm/pix => px=%dx%d",
-        area_m2, width_m, height_m, res_m_per_px, w_px, h_px
-    )
-
+    # evalscript (bandas B02,B03,B04,B08,B8A,B11,B12)
     evalscript = """
         function setup() {
           return { input:["B02","B03","B04","B08","B8A","B11","B12"], output:{bands:7} };
@@ -179,11 +192,28 @@ def buscar_imagenes(geom, fecha_ini, fecha_fin, max_items=3):
         }
     """
 
+    # utilidad para convertir timestamp ISO a rango de un día (YYYY-MM-DD, YYYY-MM-DD)
+    from datetime import datetime, timedelta
+    def normalizar_timestamp_a_dia(ts):
+        try:
+            # remover Z si la hay y parsear
+            dt = datetime.fromisoformat(ts.replace("Z", ""))
+        except Exception:
+            # si no puede parsear, devolver un rango amplio seguro (fallback)
+            logger.warning("No se pudo parsear timestamp '%s', usando rango fallback", ts)
+            return (fecha_ini, fecha_fin)
+        start = dt.strftime("%Y-%m-%d")
+        end = (dt + timedelta(days=1)).strftime("%Y-%m-%d")
+        return (start, end)
+
+    # LOOP: intentar descargar cada item seleccionado hasta encontrar la primera imagen válida
     for item in selected:
         timestamp = item["properties"]["datetime"]
         logger.info("Procesando timestamp: %s", timestamp)
 
         try:
+            time_interval = normalizar_timestamp_a_dia(timestamp)
+
             req = SentinelHubRequest(
                 evalscript=evalscript,
                 responses=[SentinelHubRequest.output_response("default", MimeType.TIFF)],
@@ -192,31 +222,46 @@ def buscar_imagenes(geom, fecha_ini, fecha_fin, max_items=3):
                 input_data=[
                     SentinelHubRequest.input_data(
                         data_collection=DataCollection.SENTINEL2_L2A,
-                        time_interval=normalizar_timestamp(timestamp)
+                        time_interval=time_interval
                     )
                 ],
                 config=config
             )
 
             data = req.get_data()
+
+            # DEBUG CRÍTICO: inspeccionar qué devuelve SH
+            logger.info("Respuesta de SH: type=%s len=%s", type(data), len(data) if data else "None")
+            if data:
+                logger.info("Shape primer elemento: %s", getattr(data[0], "shape", "sin shape"))
+
             if not data:
-                logger.warning("No data returned for timestamp %s", timestamp)
+                logger.warning("No data returned para timestamp %s (interval=%s)", timestamp, time_interval)
                 continue
 
-            arr = data[0].astype("float32")
+            # tomar primer elemento
+            arr = data[0]
 
+            # asegurar float32
+            arr = arr.astype("float32")
+
+            # normalizar si viene en DN alto
             if np.nanmax(arr) > 2000:
                 arr = arr / 10000.0
 
-            arr = np.nan_to_num(arr)
+            # manejos de NaN/Inf
+            arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
 
+            # devolver inmediatamente la primera imagen válida
             return [arr]
 
         except Exception as e:
             logger.exception("Error descargando imagen %s: %s", timestamp, e)
+            # continuar con el siguiente item
             continue
 
-    logger.warning("Ninguna imagen válida fue encontrada.")
+    # si ninguna imagen funcionó
+    logger.warning("Ninguna imagen válida fue encontrada entre los items seleccionados.")
     return []
 # =====================================
 # Cálculo de índices vegetativos (sin cambios, operando en float32 normalizado)
