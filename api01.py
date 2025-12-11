@@ -147,7 +147,7 @@ def buscar_imagenes(geom, fecha_ini, fecha_fin, max_items=3):
         logger.info("items encontrados en catálogo: %d", len(items))
     except Exception as e:
         logger.exception("Error buscando en catalog: %s", e)
-        raise HTTPException(status_code=502, detail=f"Error buscando metadatos: {}".format(e))
+        raise HTTPException(status_code=502, detail=f"Error buscando metadatos: {e}")
 
     if not items:
         logger.warning("No se encontraron items dentro del rango solicitado.")
