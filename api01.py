@@ -47,7 +47,6 @@ config = SHConfig()
 config.download_timeout_seconds = 150  # ejemplo
 config.sh_client_id = os.getenv("SH_CLIENT_ID", "51f7ce9b-3718-4960-99b6-65f3f963611d")
 config.sh_client_secret = os.getenv("SH_CLIENT_SECRET", "CF7oglmD9yLwefP3Od30Tg8ZBuciiMmF")
-# config.instance_id ya no es imprescindible si usas OAuth2 + Sentinel services
 config.sh_base_url = "https://services.sentinel-hub.com"
 
 # =====================================
@@ -62,13 +61,12 @@ HEATMAP_FIGSIZE = (4, 4)      # figura más pequeña
 SENTINEL_TIMEOUT = 60         # segundos de timeout para solicitudes de SentinelHub
 
 # utilidad para convertir timestamps ISO a rango de un día
-
 def normalizar_timestamp(ts):
     dt = datetime.fromisoformat(ts.replace("Z", ""))
     start = dt.strftime("%Y-%m-%d")
     end = (dt + timedelta(days=1)).strftime("%Y-%m-%d")
     return (start, end)
-    
+
 # =====================================
 # HELPERS: cálculo de área aproximada y resolución
 # =====================================
@@ -263,8 +261,9 @@ def buscar_imagenes(geom, fecha_ini, fecha_fin, max_items=3):
     # si ninguna imagen funcionó
     logger.warning("Ninguna imagen válida fue encontrada entre los items seleccionados.")
     return []
+
 # =====================================
-# Cálculo de índices vegetativos (sin cambios, operando en float32 normalizado)
+# Cálculo de índices vegetativos (operando en float32 normalizado)
 # =====================================
 def calc_indices(bandas):
     # bandas expected shape (7, H, W)
@@ -324,9 +323,34 @@ def diagnostico_indice(indice, nombre):
     return f"Valor medio: {avg:.2f}"
 
 # =====================================
-# Crear PDF (sin cambios funcionales)
+# Helper: convertir array float32 (0..1) a PNG base64 (RGB)
+# =====================================
+def array_to_png_base64(arr01):
+    """
+    arr01: numpy array HxWx3 with floats expected in ~0..1 range.
+    Returns base64 string of PNG.
+    """
+    # clip and scale to 0..255
+    a = np.clip(arr01, 0.0, 1.0)
+    uint8 = (a * 255.0).astype(np.uint8)
+    buf = BytesIO()
+    plt.figure(figsize=(6,6))
+    plt.axis('off')
+    plt.imshow(uint8)
+    plt.tight_layout(pad=0)
+    plt.savefig(buf, format='png', dpi=100, bbox_inches='tight', pad_inches=0)
+    plt.close()
+    buf.seek(0)
+    return base64.b64encode(buf.read()).decode()
+
+# =====================================
+# Crear PDF (adaptada para usar imágenes en base64 y limpieza)
 # =====================================
 def crear_pdf(indices):
+    """
+    indices: dict with keys -> { 'img_base64': str, 'diagnostico': str }
+    Returns path to generated PDF.
+    """
     file_path = "/tmp/diagnostico.pdf"
     doc = SimpleDocTemplate(file_path, pagesize=letter)
     styles = getSampleStyleSheet()
@@ -335,23 +359,39 @@ def crear_pdf(indices):
     story.append(Paragraph("<b>Reporte de Índices Vegetativos</b>", styles['Title']))
     story.append(Spacer(1, 20))
 
+    # Guardar imágenes temporales para ReportLab
+    temp_files = []
     for nombre, data in indices.items():
         story.append(Paragraph(f"<b>{nombre}</b>", styles['Heading2']))
-        story.append(Paragraph(data["diagnostico"], styles['BodyText']))
+        story.append(Paragraph(data.get("diagnostico", ""), styles['BodyText']))
 
-        img_bytes = base64.b64decode(data["img_base64"])
-        img_path = f"/tmp/{nombre}.png"
-        with open(img_path, "wb") as f:
-            f.write(img_bytes)
-
-        story.append(Image(img_path, width=300, height=300))
-        story.append(Spacer(1, 20))
+        img_b64 = data.get("img_base64")
+        if img_b64:
+            img_bytes = base64.b64decode(img_b64)
+            img_path = f"/tmp/{nombre}.png"
+            with open(img_path, "wb") as f:
+                f.write(img_bytes)
+            temp_files.append(img_path)
+            # ajustar tamaño si muy grande
+            story.append(Image(img_path, width=300, height=300))
+            story.append(Spacer(1, 20))
+        else:
+            story.append(Paragraph("Imagen no disponible", styles['BodyText']))
+            story.append(Spacer(1, 10))
 
     doc.build(story)
+
+    # limpiar archivos temporales de imagen (no el PDF)
+    for p in temp_files:
+        try:
+            os.remove(p)
+        except Exception:
+            pass
+
     return file_path
 
 # =====================================
-# ENDPOINT PRINCIPAL optimizado + FIX SHAPELY
+# ENDPOINT PRINCIPAL optimizado + FIX SHAPELY (ahora retorna productos)
 # =====================================
 @app.post("/analizar")
 def analizar(req: Req):
@@ -371,7 +411,11 @@ def analizar(req: Req):
         except Exception as gerr:
             return {
                 "status": "error",
-                "msg": f"Error corrigiendo geometría: {str(gerr)}"
+                "msg": f"Error corrigiendo geometría: {str(gerr)}",
+                "indices": None,
+                "imagenes": None,
+                "pdf": None,
+                "metadata": None
             }
 
         # ================================
@@ -380,7 +424,14 @@ def analizar(req: Req):
         imgs = buscar_imagenes(geom, req.fecha_ini, req.fecha_fin)
 
         if len(imgs) == 0:
-            return {"status": "error", "msg": "No se encontraron imágenes."}
+            return {
+                "status": "error",
+                "msg": "No se encontraron imágenes.",
+                "indices": None,
+                "imagenes": None,
+                "pdf": None,
+                "metadata": None
+            }
 
         # ================================
         # 4) Tomar la mejor imagen
@@ -398,14 +449,24 @@ def analizar(req: Req):
 
         except Exception as e:
             logger.exception("Error preparando imagen: %s", e)
-            return {"status": "error", "msg": f"Error preparando la imagen: {str(e)}"}
+            return {
+                "status": "error",
+                "msg": f"Error preparando la imagen: {str(e)}",
+                "indices": None,
+                "imagenes": None,
+                "pdf": None,
+                "metadata": None
+            }
 
         # Convertir a (bands, H, W)
-        bandas = img.transpose((2, 0, 1)).astype("float32")
+        bandas = img.transpose((2, 0, 1)).astype("float32")  # shape (7, H, W)
 
         # Normalización automática si vienen en DN
         if np.nanmax(bandas) > 2000:
             bandas = bandas / 10000.0
+
+        H = bandas.shape[1]
+        W = bandas.shape[2]
 
         # ================================
         # 5) Calcular índices
@@ -413,7 +474,7 @@ def analizar(req: Req):
         indices_raw = calc_indices(bandas)
 
         # ================================
-        # 6) Heatmaps + diagnósticos
+        # 6) Heatmaps + diagnósticos (ya existían)
         # ================================
         indices = {}
         for nombre, matriz in indices_raw.items():
@@ -430,20 +491,82 @@ def analizar(req: Req):
                 }
 
         # ================================
-        # 7) Respuesta final
+        # 7) Generar RGB true-color PNG (B04,B03,B02)
+        #    bands order: [B02,B03,B04,B08,B8A,B11,B12] -> indices 0,1,2
+        # ================================
+        try:
+            # seleccionar B04,B03,B02
+            B02 = bandas[0]
+            B03 = bandas[1]
+            B04 = bandas[2]
+            # stack as float 0..1 using min/max stretch per band
+            def stretch01(b):
+                lo = np.nanpercentile(b, 2)
+                hi = np.nanpercentile(b, 98)
+                if hi - lo <= 0:
+                    return np.clip((b - lo), 0, 1)
+                s = (b - lo) / (hi - lo)
+                return np.clip(s, 0.0, 1.0)
+
+            r = stretch01(B04)
+            g = stretch01(B03)
+            b = stretch01(B02)
+            rgb = np.dstack([r, g, b])  # HxWx3 floats 0..1
+            rgb_b64 = array_to_png_base64(rgb)
+        except Exception as e:
+            logger.exception("Error generando RGB: %s", e)
+            rgb_b64 = None
+
+        # ================================
+        # 8) Generar PDF con los heatmaps
+        # ================================
+        try:
+            pdf_path = crear_pdf(indices)
+            with open(pdf_path, "rb") as f:
+                pdf_b64 = base64.b64encode(f.read()).decode()
+            # opcional: eliminar pdf temporal
+            try:
+                os.remove(pdf_path)
+            except Exception:
+                pass
+        except Exception as e:
+            logger.exception("Error generando PDF: %s", e)
+            pdf_b64 = None
+
+        # ================================
+        # 9) Metadata
+        # ================================
+        metadata = {
+            "shape": [int(H), int(W), int(bandas.shape[0])],
+            "bbox": list(map(float, geom.bounds)),
+            "timestamp": item["properties"]["datetime"] if 'item' in locals() else None,
+            "resolution_m_per_px": int(res_m_per_px)
+        }
+
+        # ================================
+        # 10) Respuesta final (estructura consistente)
         # ================================
         return {
             "status": "ok",
-            "indices": indices
+            "msg": "Procesamiento completado correctamente",
+            "indices": indices,            # cada uno contiene img_base64 + diagnostico
+            "imagenes": {
+                "rgb": rgb_b64
+            },
+            "pdf": pdf_b64,
+            "metadata": metadata
         }
 
     except Exception as e:
         logger.exception("Error inesperado en /analizar: %s", e)
         return {
             "status": "error",
-            "msg": f"Error inesperado: {str(e)}"
+            "msg": f"Error inesperado: {str(e)}",
+            "indices": None,
+            "imagenes": None,
+            "pdf": None,
+            "metadata": None
         }
-
 
 # =====================================
 # /pdf and /dashboard endpoints unchanged (kept in your original file)
