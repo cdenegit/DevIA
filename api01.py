@@ -4,6 +4,7 @@ from pydantic import BaseModel
 import json
 import os
 import math
+from datetime import datetime, timedelta
 import logging
 from sentinelhub import (
     SHConfig, BBox, CRS, DataCollection, SentinelHubCatalog,
@@ -60,6 +61,14 @@ HEATMAP_DPI = 100              # dpi más pequeño para reducir memoria
 HEATMAP_FIGSIZE = (4, 4)      # figura más pequeña
 SENTINEL_TIMEOUT = 60         # segundos de timeout para solicitudes de SentinelHub
 
+# utilidad para convertir timestamps ISO a rango de un día
+
+def normalizar_timestamp(ts):
+    dt = datetime.fromisoformat(ts.replace("Z", ""))
+    start = dt.strftime("%Y-%m-%d")
+    end = (dt + timedelta(days=1)).strftime("%Y-%m-%d")
+    return (start, end)
+    
 # =====================================
 # HELPERS: cálculo de área aproximada y resolución
 # =====================================
@@ -107,26 +116,17 @@ def choose_resolution(width_m, height_m):
 # BUSCAR IMÁGENES (optimizada)
 # =====================================
 def buscar_imagenes(geom, fecha_ini, fecha_fin, max_items=3):
-    """
-    Busca y descarga hasta `max_items` imágenes Sentinel-2 L2A recortadas al bbox (no al polígono).
-    Optimizaciones:
-      - calcula resolución automática según área para limitar memoria
-      - usa timeout en requests (SentinelHub client internamente usa requests)
-      - convierte bandas a float32 y normaliza si valores altos
-    Retorna lista de arrays (H, W, 7) numpy.
-    """
+
     logger.info("fecha_ini: %s", fecha_ini)
     logger.info("fecha_fin: %s", fecha_fin)
+    logger.info("max_items recibido: %s", max_items)
 
-
-    
-    bbox_vals = geom.bounds  # (minx, miny, maxx, maxy)
-    bbox = BBox(bbox=bbox_vals, crs=CRS.WGS84)
-
+    bbox_vals = geom.bounds
     logger.info("bbox_vals: %s", bbox_vals)
+
+    bbox = BBox(bbox=bbox_vals, crs=CRS.WGS84)
     catalog = SentinelHubCatalog(config=config)
 
-    # Filtro CQL2 JSON para baja nubosidad
     filtro = {
         "op": "and",
         "args": [
@@ -134,7 +134,6 @@ def buscar_imagenes(geom, fecha_ini, fecha_fin, max_items=3):
         ]
     }
 
-    # Buscar metadatos
     try:
         search = catalog.search(
             collection=DataCollection.SENTINEL2_L2A,
@@ -148,21 +147,29 @@ def buscar_imagenes(geom, fecha_ini, fecha_fin, max_items=3):
         logger.info("items encontrados en catálogo: %d", len(items))
     except Exception as e:
         logger.exception("Error buscando en catalog: %s", e)
-        raise HTTPException(status_code=502, detail=f"Error buscando metadatos: {str(e)}")
+        raise HTTPException(status_code=502, detail=f"Error buscando metadatos: {}".format(e))
 
     if not items:
+        logger.warning("No se encontraron items dentro del rango solicitado.")
         return []
 
     items_sorted = sorted(items, key=lambda x: x["properties"]["datetime"])
     selected = items_sorted[-max_items:]
 
-    # compute bbox size in meters and choose resolution
+    logger.info("items seleccionados: %d", len(selected))
+
+    if not selected:
+        logger.warning("selected está vacío. Posible problema con max_items.")
+        return []
+
     area_m2, width_m, height_m = bbox_area_meters(bbox_vals)
     res_m_per_px, w_px, h_px = choose_resolution(width_m, height_m)
-    logger.info("BBox area m2=%.2f width_m=%.2f height_m=%.2f -> res=%dm/pix => px=%dx%d",
-                area_m2, width_m, height_m, res_m_per_px, w_px, h_px)
 
-    # build evalscript
+    logger.info(
+        "BBox area m2=%.2f width_m=%.2f height_m=%.2f -> res=%dm/pix => px=%dx%d",
+        area_m2, width_m, height_m, res_m_per_px, w_px, h_px
+    )
+
     evalscript = """
         function setup() {
           return { input:["B02","B03","B04","B08","B8A","B11","B12"], output:{bands:7} };
@@ -172,9 +179,9 @@ def buscar_imagenes(geom, fecha_ini, fecha_fin, max_items=3):
         }
     """
 
-    resultados = []
     for item in selected:
         timestamp = item["properties"]["datetime"]
+        logger.info("Procesando timestamp: %s", timestamp)
 
         try:
             req = SentinelHubRequest(
@@ -182,41 +189,35 @@ def buscar_imagenes(geom, fecha_ini, fecha_fin, max_items=3):
                 responses=[SentinelHubRequest.output_response("default", MimeType.TIFF)],
                 bbox=bbox,
                 size=bbox_to_dimensions(bbox, res_m_per_px),
-                input_data=[SentinelHubRequest.input_data(
+                input_data=[
+                    SentinelHubRequest.input_data(
                         data_collection=DataCollection.SENTINEL2_L2A,
-                        time_interval=(timestamp, timestamp)
-                    )],
-                config=config 
+                        time_interval=normalizar_timestamp(timestamp)
+                    )
+                ],
+                config=config
             )
 
-            # get_data may return list of arrays; we use first element
             data = req.get_data()
             if not data:
                 logger.warning("No data returned for timestamp %s", timestamp)
                 continue
 
-            # data is list of numpy arrays; often shape (H, W, bands)
-            arr = data[0]
+            arr = data[0].astype("float32")
 
-            # convert to float32 early to avoid overflow
-            arr = arr.astype("float32")
-
-            # If values appear scaled up (e.g., > 10000), normalize to ~0..1
             if np.nanmax(arr) > 2000:
                 arr = arr / 10000.0
 
-            # simple nan handling
-            arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
+            arr = np.nan_to_num(arr)
 
             return [arr]
 
         except Exception as e:
             logger.exception("Error descargando imagen %s: %s", timestamp, e)
-            # don't fail the whole loop, continue with next
             continue
 
-    return resultados
-
+    logger.warning("Ninguna imagen válida fue encontrada.")
+    return []
 # =====================================
 # Cálculo de índices vegetativos (sin cambios, operando en float32 normalizado)
 # =====================================
