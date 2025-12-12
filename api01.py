@@ -393,7 +393,7 @@ def crear_pdf(indices):
 # =====================================
 # ENDPOINT PRINCIPAL optimizado + FIX SHAPELY (ahora retorna productos)
 # =====================================
-@app.post("/analizar"
+@app.post("/analizar")
 def analizar(req: Req):
     try:
         # ================================
