@@ -393,7 +393,7 @@ def crear_pdf(indices):
 # =====================================
 # ENDPOINT PRINCIPAL optimizado + FIX SHAPELY (ahora retorna productos)
 # =====================================
-@app.post("/analizar")
+@app.post("/analizar"
 def analizar(req: Req):
     try:
         # ================================
@@ -491,20 +491,42 @@ def analizar(req: Req):
                 }
 
         # ================================
+        # Helper local: convertir array HxWx3 float 0..1 a PNG base64
+        # ================================
+        def array_to_png_base64(arr_rgb):
+            try:
+                # asegurar 0..1 float
+                arr = np.clip(arr_rgb, 0.0, 1.0)
+                arr_uint8 = (arr * 255).astype(np.uint8)
+                buf = BytesIO()
+                # matplotlib.imsave escribe a buffer sin abrir figura
+                plt.imsave(buf, arr_uint8, format="png")
+                buf.seek(0)
+                return base64.b64encode(buf.read()).decode()
+            except Exception as e:
+                logger.exception("Error en array_to_png_base64: %s", e)
+                return None
+
+        # ================================
         # 7) Generar RGB true-color PNG (B04,B03,B02)
         #    bands order: [B02,B03,B04,B08,B8A,B11,B12] -> indices 0,1,2
         # ================================
         try:
-            # seleccionar B04,B03,B02
+            # seleccionar B04,B03,B02 (indices 2,1,0)
             B02 = bandas[0]
             B03 = bandas[1]
             B04 = bandas[2]
+
             # stack as float 0..1 using min/max stretch per band
             def stretch01(b):
                 lo = np.nanpercentile(b, 2)
                 hi = np.nanpercentile(b, 98)
                 if hi - lo <= 0:
-                    return np.clip((b - lo), 0, 1)
+                    s = b - lo
+                    s = s - np.nanmin(s)
+                    if np.nanmax(s) > 0:
+                        s = s / np.nanmax(s)
+                    return np.clip(s, 0.0, 1.0)
                 s = (b - lo) / (hi - lo)
                 return np.clip(s, 0.0, 1.0)
 
@@ -535,12 +557,20 @@ def analizar(req: Req):
 
         # ================================
         # 9) Metadata
+        #   - calcular resolución localmente para evitar NameError
         # ================================
+        try:
+            area_m2, width_m, height_m = bbox_area_meters(geom.bounds)
+            res_m_per_px, w_px, h_px = choose_resolution(width_m, height_m)
+            res_m_per_px_int = int(res_m_per_px)
+        except Exception:
+            res_m_per_px_int = None
+
         metadata = {
             "shape": [int(H), int(W), int(bandas.shape[0])],
             "bbox": list(map(float, geom.bounds)),
-            "timestamp": item["properties"]["datetime"] if 'item' in locals() else None,
-            "resolution_m_per_px": int(res_m_per_px)
+            "timestamp": None,  # no hay timestamp disponible aquí (buscarlo requeriría cambiar buscar_imagenes)
+            "resolution_m_per_px": res_m_per_px_int
         }
 
         # ================================
@@ -567,6 +597,7 @@ def analizar(req: Req):
             "pdf": None,
             "metadata": None
         }
+
 
 # =====================================
 # /pdf and /dashboard endpoints unchanged (kept in your original file)
