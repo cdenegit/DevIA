@@ -397,193 +397,128 @@ def crear_pdf(indices):
 def analizar(req: Req):
     try:
         # ================================
-        # 1) Leer GeoJSON enviado desde PHP
+        # 1) Leer GeoJSON
         # ================================
         geo = json.loads(req.geojson)
         geom = shape(geo)
 
-        # ================================
-        # 2) Corrección OGC obligatoria (SELF-INTERSECTIONS, BOWTIES, HOLES)
-        # ================================
-        try:
-            if not geom.is_valid:
-                geom = geom.buffer(0)   # ← FIX GEOMETRÍA
-        except Exception as gerr:
-            return {
-                "status": "error",
-                "msg": f"Error corrigiendo geometría: {str(gerr)}",
-                "indices": None,
-                "imagenes": None,
-                "pdf": None,
-                "metadata": None
-            }
+        if not geom.is_valid:
+            geom = geom.buffer(0)
 
         # ================================
-        # 3) Buscar imágenes
+        # 2) Buscar imágenes
         # ================================
         imgs = buscar_imagenes(geom, req.fecha_ini, req.fecha_fin)
 
-        if len(imgs) == 0:
+        if not imgs:
             return {
                 "status": "error",
                 "msg": "No se encontraron imágenes.",
-                "indices": None,
-                "imagenes": None,
-                "pdf": None,
-                "metadata": None
+                "indices": [],
+                "indices_lista": [],
+                "imagenes": {},
+                "pdf_base64": None,
+                "metadata": {}
             }
 
         # ================================
-        # 4) Tomar la mejor imagen
+        # 3) Preparar imagen
         # ================================
-        try:
-            img = imgs[-1]  # Última imagen temporal
+        img = imgs[-1]
+        arr = np.array(img)
 
-            # Adaptar formato si viene en (1, H, W, 7)
-            arr = np.array(img)
-            if arr.ndim == 4:
-                img = arr[0]
+        if arr.ndim == 4:
+            arr = arr[0]
 
-            if img.ndim != 3 or img.shape[2] < 7:
-                raise ValueError("Formato de imagen inesperado")
+        if arr.ndim != 3 or arr.shape[2] < 7:
+            raise ValueError("Formato de imagen inesperado")
 
-        except Exception as e:
-            logger.exception("Error preparando imagen: %s", e)
-            return {
-                "status": "error",
-                "msg": f"Error preparando la imagen: {str(e)}",
-                "indices": None,
-                "imagenes": None,
-                "pdf": None,
-                "metadata": None
-            }
+        bandas = arr.transpose((2, 0, 1)).astype("float32")
 
-        # Convertir a (bands, H, W)
-        bandas = img.transpose((2, 0, 1)).astype("float32")  # shape (7, H, W)
-
-        # Normalización automática si vienen en DN
         if np.nanmax(bandas) > 2000:
-            bandas = bandas / 10000.0
+            bandas /= 10000.0
 
-        H = bandas.shape[1]
-        W = bandas.shape[2]
+        H, W = bandas.shape[1], bandas.shape[2]
 
         # ================================
-        # 5) Calcular índices
+        # 4) Calcular índices
         # ================================
         indices_raw = calc_indices(bandas)
 
-        # ================================
-        # 6) Heatmaps + diagnósticos (ya existían)
-        # ================================
         indices = {}
+        indices_lista = []
+
         for nombre, matriz in indices_raw.items():
-            try:
-                indices[nombre] = {
-                    "img_base64": generar_heatmap(matriz, nombre),
-                    "diagnostico": diagnostico_indice(matriz, nombre)
-                }
-            except Exception as e:
-                logger.exception("Error generando heatmap para %s: %s", nombre, e)
-                indices[nombre] = {
-                    "img_base64": None,
-                    "diagnostico": f"Error generando índice: {str(e)}"
-                }
+            img_b64 = generar_heatmap(matriz, nombre)
+            diag = diagnostico_indice(matriz, nombre)
+
+            indices[nombre] = {
+                "img_base64": img_b64,
+                "diagnostico": diag
+            }
+
+            indices_lista.append({
+                "nombre": nombre,
+                "imagen": img_b64,
+                "diagnostico": diag
+            })
 
         # ================================
-        # Helper local: convertir array HxWx3 float 0..1 a PNG base64
+        # 5) Imagen RGB (B04,B03,B02)
         # ================================
-        def array_to_png_base64(arr_rgb):
-            try:
-                # asegurar 0..1 float
-                arr = np.clip(arr_rgb, 0.0, 1.0)
-                arr_uint8 = (arr * 255).astype(np.uint8)
-                buf = BytesIO()
-                # matplotlib.imsave escribe a buffer sin abrir figura
-                plt.imsave(buf, arr_uint8, format="png")
-                buf.seek(0)
-                return base64.b64encode(buf.read()).decode()
-            except Exception as e:
-                logger.exception("Error en array_to_png_base64: %s", e)
-                return None
+        def stretch01(b):
+            lo = np.nanpercentile(b, 2)
+            hi = np.nanpercentile(b, 98)
+            if hi <= lo:
+                return np.zeros_like(b)
+            return np.clip((b - lo) / (hi - lo), 0, 1)
+
+        r = stretch01(bandas[2])
+        g = stretch01(bandas[1])
+        b = stretch01(bandas[0])
+        rgb = np.dstack([r, g, b])
+
+        buf = BytesIO()
+        plt.imsave(buf, (rgb * 255).astype(np.uint8), format="png")
+        buf.seek(0)
+        rgb_b64 = base64.b64encode(buf.read()).decode()
 
         # ================================
-        # 7) Generar RGB true-color PNG (B04,B03,B02)
-        #    bands order: [B02,B03,B04,B08,B8A,B11,B12] -> indices 0,1,2
+        # 6) PDF
         # ================================
+        pdf_path = crear_pdf(indices)
+        with open(pdf_path, "rb") as f:
+            pdf_b64 = base64.b64encode(f.read()).decode()
+
         try:
-            # seleccionar B04,B03,B02 (indices 2,1,0)
-            B02 = bandas[0]
-            B03 = bandas[1]
-            B04 = bandas[2]
-
-            # stack as float 0..1 using min/max stretch per band
-            def stretch01(b):
-                lo = np.nanpercentile(b, 2)
-                hi = np.nanpercentile(b, 98)
-                if hi - lo <= 0:
-                    s = b - lo
-                    s = s - np.nanmin(s)
-                    if np.nanmax(s) > 0:
-                        s = s / np.nanmax(s)
-                    return np.clip(s, 0.0, 1.0)
-                s = (b - lo) / (hi - lo)
-                return np.clip(s, 0.0, 1.0)
-
-            r = stretch01(B04)
-            g = stretch01(B03)
-            b = stretch01(B02)
-            rgb = np.dstack([r, g, b])  # HxWx3 floats 0..1
-            rgb_b64 = array_to_png_base64(rgb)
-        except Exception as e:
-            logger.exception("Error generando RGB: %s", e)
-            rgb_b64 = None
-
-        # ================================
-        # 8) Generar PDF con los heatmaps
-        # ================================
-        try:
-            pdf_path = crear_pdf(indices)
-            with open(pdf_path, "rb") as f:
-                pdf_b64 = base64.b64encode(f.read()).decode()
-            # opcional: eliminar pdf temporal
-            try:
-                os.remove(pdf_path)
-            except Exception:
-                pass
-        except Exception as e:
-            logger.exception("Error generando PDF: %s", e)
-            pdf_b64 = None
-
-        # ================================
-        # 9) Metadata
-        #   - calcular resolución localmente para evitar NameError
-        # ================================
-        try:
-            area_m2, width_m, height_m = bbox_area_meters(geom.bounds)
-            res_m_per_px, w_px, h_px = choose_resolution(width_m, height_m)
-            res_m_per_px_int = int(res_m_per_px)
+            os.remove(pdf_path)
         except Exception:
-            res_m_per_px_int = None
+            pass
+
+        # ================================
+        # 7) Metadata
+        # ================================
+        area_m2, width_m, height_m = bbox_area_meters(geom.bounds)
+        res_m, _, _ = choose_resolution(width_m, height_m)
 
         metadata = {
-            "shape": [int(H), int(W), int(bandas.shape[0])],
+            "shape": [H, W, 7],
             "bbox": list(map(float, geom.bounds)),
-            "timestamp": None,  # no hay timestamp disponible aquí (buscarlo requeriría cambiar buscar_imagenes)
-            "resolution_m_per_px": res_m_per_px_int
+            "resolution_m_per_px": int(res_m)
         }
 
         # ================================
-        # 10) Respuesta final (estructura consistente)
+        # 8) RESPUESTA FINAL
         # ================================
         return {
             "status": "ok",
             "msg": "Procesamiento completado correctamente",
-            "indices": indices,            # cada uno contiene img_base64 + diagnostico
+            "indices": indices,                 # dict técnico
+            "indices_lista": indices_lista,     # ARRAY para frontend
             "imagenes": {
                 "rgb": rgb_b64
             },
-            "pdf": pdf_b64,
+            "pdf_base64": pdf_b64,
             "metadata": metadata
         }
 
@@ -591,13 +526,13 @@ def analizar(req: Req):
         logger.exception("Error inesperado en /analizar: %s", e)
         return {
             "status": "error",
-            "msg": f"Error inesperado: {str(e)}",
-            "indices": None,
-            "imagenes": None,
-            "pdf": None,
-            "metadata": None
+            "msg": str(e),
+            "indices": [],
+            "indices_lista": [],
+            "imagenes": {},
+            "pdf_base64": None,
+            "metadata": {}
         }
-
 
 # =====================================
 # /pdf and /dashboard endpoints unchanged (kept in your original file)
