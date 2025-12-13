@@ -528,33 +528,36 @@ def analizar(req: Req):
 
         H, W = bandas.shape[1], bandas.shape[2]
 
-        # ================================
+        # ===========================
         # 4) Calcular índices
-        # ================================
+        # ===========================
+
         indices_raw = calc_indices(bandas)
-
-        diagnostico, semaforo = diagnostico_indice(matriz, nombre)
-
-        indices[nombre] = {
-            "img_base64": generar_heatmap(matriz, nombre),
-            "diagnostico": diagnostico,
-            "semaforo": semaforo
-        }
+        
+        indices = {}
         indices_lista = []
-
+        
         for nombre, matriz in indices_raw.items():
+        
+            # imagen
             img_b64 = generar_heatmap(matriz, nombre)
-            diag = diagnostico_indice(matriz, nombre)
-
+        
+            # diagnóstico + semáforo
+            diagnostico, semaforo = diagnostico_indice(matriz, nombre)
+        
+            # objeto principal (para frontend)
             indices[nombre] = {
                 "img_base64": img_b64,
-                "diagnostico": diag
+                "diagnostico": diagnostico,
+                "semaforo": semaforo
             }
-
+        
+            # opcional (si lo usas en PDF o logs)
             indices_lista.append({
                 "nombre": nombre,
                 "imagen": img_b64,
-                "diagnostico": diag
+                "diagnostico": diagnostico,
+                "semaforo": semaforo
             })
 
         # ================================
