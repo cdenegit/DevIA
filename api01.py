@@ -582,28 +582,34 @@ def analizar(req: Req):
         rgb_overlay_b64 = generar_rgb_con_geojson(rgb, geom)
 
         # ================================
-        # 6) PDF
+        # 6) Metadata  (SIEMPRE ANTES DEL PDF)
         # ================================
-        pdf_path = crear_pdf_avanzado(indices, rgb_b64, metadata)
+        area_m2, width_m, height_m = bbox_area_meters(geom.bounds)
+        res_m, _, _ = choose_resolution(width_m, height_m)
+        
+        metadata = {
+            "shape": [int(H), int(W), int(bandas.shape[0])],
+            "bbox": list(map(float, geom.bounds)),
+            "resolution_m_per_px": int(res_m),
+            "area_m2": float(area_m2)
+        }
+        
+        # ================================
+        # 7) PDF avanzado
+        # ================================
+        pdf_path = crear_pdf_avanzado(
+            indices=indices,
+            rgb_b64=rgb_b64,
+            metadata=metadata
+        )
+        
         with open(pdf_path, "rb") as f:
             pdf_b64 = base64.b64encode(f.read()).decode()
-
+        
         try:
             os.remove(pdf_path)
         except Exception:
             pass
-
-        # ================================
-        # 7) Metadata
-        # ================================
-        area_m2, width_m, height_m = bbox_area_meters(geom.bounds)
-        res_m, _, _ = choose_resolution(width_m, height_m)
-
-        metadata = {
-            "shape": [H, W, 7],
-            "bbox": list(map(float, geom.bounds)),
-            "resolution_m_per_px": int(res_m)
-        }
 
         # ================================
         # 8) RESPUESTA FINAL
