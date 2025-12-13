@@ -21,8 +21,9 @@ import uvicorn
 
 # ==== PDF (ya en tu requirements) ====
 from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Image, Spacer
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Image, Spacer, PageBreak
 from reportlab.lib.styles import getSampleStyleSheet
+
 
 # =====================================
 # Logging básico
@@ -307,20 +308,25 @@ def generar_heatmap(indice, nombre):
 # Diagnóstico (igual)
 # =====================================
 def diagnostico_indice(indice, nombre):
-    # use nanmean on float32 arrays (should not overflow now)
-    try:
-        avg = float(np.nanmean(indice))
-    except Exception:
-        avg = 0.0
-    if nombre == "NDVI":
-        if avg < 0.2: return "Vegetación muy estresada o sin cobertura."
-        elif avg < 0.5: return "Vegetación moderada."
-        else: return "Vegetación saludable."
-    elif nombre == "NDMI":
-        if avg < 0.2: return "Baja humedad."
-        elif avg < 0.5: return "Humedad media."
-        else: return "Buena humedad."
-    return f"Valor medio: {avg:.2f}"
+    avg = float(np.nanmean(indice))
+
+    if nombre in ["NDVI", "MSAVI", "EVI", "NDRE", "RECI"]:
+        if avg >= 0.6:
+            return "Vegetación saludable", "verde"
+        elif avg >= 0.3:
+            return "Vegetación moderada", "amarillo"
+        else:
+            return "Vegetación estresada", "rojo"
+
+    if nombre == "NDMI":
+        if avg >= 0.4:
+            return "Buena humedad", "verde"
+        elif avg >= 0.2:
+            return "Humedad media", "amarillo"
+        else:
+            return "Baja humedad", "rojo"
+
+    return f"Valor medio: {avg:.2f}", "amarillo"
 
 # =====================================
 # Helper: convertir array float32 (0..1) a PNG base64 (RGB)
@@ -390,6 +396,88 @@ def crear_pdf(indices):
 
     return file_path
 
+# ================================        
+# 9) RPDF Avanzado
+# ================================
+def crear_pdf_avanzado(indices, rgb_b64, metadata):
+    file_path = "/tmp/reporte_eo.pdf"
+    styles = getSampleStyleSheet()
+    doc = SimpleDocTemplate(file_path, pagesize=letter)
+    story = []
+
+    # ================================
+    # PORTADA
+    # ================================
+    story.append(Paragraph("Reporte Satelital EO", styles["Title"]))
+    story.append(Spacer(1, 20))
+
+    story.append(Paragraph(
+        "Análisis de índices espectrales a partir de imágenes Sentinel-2",
+        styles["BodyText"]
+    ))
+    story.append(Spacer(1, 20))
+
+    # Imagen geográfica RGB
+    if rgb_b64:
+        portada_img = "/tmp/portada_rgb.png"
+        with open(portada_img, "wb") as f:
+            f.write(base64.b64decode(rgb_b64))
+
+        story.append(Image(portada_img, width=420, height=420))
+        story.append(Spacer(1, 20))
+
+    # ================================
+    # METADATA
+    # ================================
+    story.append(Paragraph("Metadata del Análisis", styles["Heading2"]))
+    story.append(Spacer(1, 10))
+
+    story.append(Paragraph(
+        f"<b>BBOX:</b> {metadata.get('bbox')}", styles["BodyText"]
+    ))
+    story.append(Paragraph(
+        f"<b>Resolución:</b> {metadata.get('resolution_m_per_px')} m/pixel",
+        styles["BodyText"]
+    ))
+    story.append(Paragraph(
+        f"<b>Dimensiones:</b> {metadata.get('shape')}",
+        styles["BodyText"]
+    ))
+
+    story.append(PageBreak())
+
+    # ================================
+    # ÍNDICES (2 por página)
+    # ================================
+    count = 0
+    for nombre, data in indices.items():
+
+        story.append(Paragraph(nombre, styles["Heading2"]))
+        story.append(Spacer(1, 8))
+
+        # imagen índice
+        if data.get("img_base64"):
+            img_path = f"/tmp/{nombre}.png"
+            with open(img_path, "wb") as f:
+                f.write(base64.b64decode(data["img_base64"]))
+
+            story.append(Image(img_path, width=350, height=300))
+            story.append(Spacer(1, 8))
+
+        # diagnóstico
+        story.append(Paragraph(
+            f"<b>Diagnóstico:</b> {data.get('diagnostico','')}",
+            styles["BodyText"]
+        ))
+        story.append(Spacer(1, 20))
+
+        count += 1
+        if count % 2 == 0:
+            story.append(PageBreak())
+
+    doc.build(story)
+    return file_path
+    
 # =====================================
 # ENDPOINT PRINCIPAL optimizado + FIX SHAPELY (ahora retorna productos)
 # =====================================
@@ -445,7 +533,13 @@ def analizar(req: Req):
         # ================================
         indices_raw = calc_indices(bandas)
 
-        indices = {}
+        diagnostico, semaforo = diagnostico_indice(matriz, nombre)
+
+        indices[nombre] = {
+            "img_base64": generar_heatmap(matriz, nombre),
+            "diagnostico": diagnostico,
+            "semaforo": semaforo
+        }
         indices_lista = []
 
         for nombre, matriz in indices_raw.items():
@@ -482,11 +576,12 @@ def analizar(req: Req):
         plt.imsave(buf, (rgb * 255).astype(np.uint8), format="png")
         buf.seek(0)
         rgb_b64 = base64.b64encode(buf.read()).decode()
+        rgb_overlay_b64 = generar_rgb_con_geojson(rgb, geom)
 
         # ================================
         # 6) PDF
         # ================================
-        pdf_path = crear_pdf(indices)
+        pdf_path = crear_pdf_avanzado(indices, rgb_b64, metadata)
         with open(pdf_path, "rb") as f:
             pdf_b64 = base64.b64encode(f.read()).decode()
 
@@ -534,9 +629,25 @@ def analizar(req: Req):
             "metadata": {}
         }
 
-# =====================================
-# /pdf and /dashboard endpoints unchanged (kept in your original file)
-# =====================================
+# ================================
+# A) Generar RGB + overlay GeoJSON
+# ================================
+
+def generar_rgb_con_geojson(rgb, geom):
+    fig, ax = plt.subplots(figsize=(6, 6))
+    ax.imshow(rgb)
+    
+    if geom.geom_type == "Polygon":
+        xs, ys = geom.exterior.xy
+        ax.plot(xs, ys, color="red", linewidth=2)
+
+    ax.set_axis_off()
+
+    buf = BytesIO()
+    plt.savefig(buf, format="png", dpi=150, bbox_inches="tight")
+    plt.close()
+    buf.seek(0)
+    return base64.b64encode(buf.read()).decode()
 
 # Make sure server start at the bottom of your file (if running directly)
 if __name__ == "__main__":
