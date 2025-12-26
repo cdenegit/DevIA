@@ -390,17 +390,16 @@ def diagnostico_indice(indice, nombre):
 
     resumen_web = f"Estado general: {resumen.split('.')[0]}."
 
-    indices[nombre] = {
-        "img_base64": generar_heatmap(matriz, nombre),
-        "diagnostico": diag["diagnostico_detallado"],
-        "resumen": diag["resumen_web"],
-        "color": diag["color"],
+    return {
+        "diagnostico_detallado": diagnostico,
+        "resumen_web": resumen_web,
+        "color": color,
     
-        # métricas numéricas
-        "avg": diag["avg"],
-        "area_sana": diag["area_sana"],
-        "area_media": diag["area_media"],
-        "area_estres": diag["area_estres"]
+        "avg": avg,
+        "std": std,
+        "area_sana": area_sana,
+        "area_media": area_media,
+        "area_estres": area_estres
     }
 
 # =====================================
