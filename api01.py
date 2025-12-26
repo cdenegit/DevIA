@@ -590,7 +590,7 @@ def analizar(req: Req):
             img_b64 = generar_heatmap(matriz, nombre)
         
             # diagnósticos + semáforo + resumen
-            diag = diagnostico_indice_avanzado(matriz, nombre)
+            diag = diagnostico_indice(matriz, nombre)
 
             indices[nombre] = {
                 "img_base64": generar_heatmap(matriz, nombre),
