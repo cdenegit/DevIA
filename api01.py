@@ -308,25 +308,72 @@ def generar_heatmap(indice, nombre):
 # Diagnóstico (igual)
 # =====================================
 def diagnostico_indice(indice, nombre):
-    avg = float(np.nanmean(indice))
+    import numpy as np
+
+    indice = np.nan_to_num(indice, nan=0.0)
+    avg = float(np.mean(indice))
+    std = float(np.std(indice))
+
+    # Clasificación por umbrales
+    area_sana = np.sum(indice >= 0.5) / indice.size * 100
+    area_media = np.sum((indice >= 0.3) & (indice < 0.5)) / indice.size * 100
+    area_estres = np.sum(indice < 0.3) / indice.size * 100
+
+    resumen = ""
+    color = "amarillo"
 
     if nombre in ["NDVI", "MSAVI", "EVI", "NDRE", "RECI"]:
         if avg >= 0.6:
-            return "Vegetación saludable", "verde"
-        elif avg >= 0.3:
-            return "Vegetación moderada", "amarillo"
+            color = "verde"
+            resumen = (
+                "La vegetación presenta un estado general saludable, "
+                "con buena actividad fotosintética y vigor adecuado."
+            )
+        elif avg >= 0.35:
+            color = "amarillo"
+            resumen = (
+                "Se observa una condición vegetal moderada. "
+                "Existen zonas con buen desarrollo y otras con posible estrés."
+            )
         else:
-            return "Vegetación estresada", "rojo"
+            color = "rojo"
+            resumen = (
+                "La cobertura vegetal presenta signos claros de estrés, "
+                "posiblemente asociados a déficit hídrico, suelo degradado "
+                "o manejo inadecuado."
+            )
 
-    if nombre == "NDMI":
+    elif nombre == "NDMI":
         if avg >= 0.4:
-            return "Buena humedad", "verde"
-        elif avg >= 0.2:
-            return "Humedad media", "amarillo"
+            color = "verde"
+            resumen = "La humedad vegetal es adecuada y consistente en la mayor parte del área."
+        elif avg >= 0.25:
+            color = "amarillo"
+            resumen = "Humedad media, con posibles zonas de estrés hídrico incipiente."
         else:
-            return "Baja humedad", "rojo"
+            color = "rojo"
+            resumen = "Baja humedad detectada. Riesgo de estrés hídrico significativo."
 
-    return f"Valor medio: {avg:.2f}", "amarillo"
+    # Diagnóstico IA-like estructurado
+    diagnostico = (
+        f"<b>Resumen:</b> {resumen}<br/>"
+        f"<b>Valor medio:</b> {avg:.2f}<br/>"
+        f"<b>Variabilidad:</b> {std:.2f}<br/>"
+        f"<b>Distribución espacial:</b><br/>"
+        f"- Área saludable: {area_sana:.1f}%<br/>"
+        f"- Área moderada: {area_media:.1f}%<br/>"
+        f"- Área estresada: {area_estres:.1f}%"
+    )
+
+    resumen_web = (
+        f"Estado general: {resumen.split('.')[0]}."
+    )
+
+    return {
+        "diagnostico_detallado": diagnostico,
+        "resumen_web": resumen_web,
+        "color": color
+    }
 
 # =====================================
 # Helper: convertir array float32 (0..1) a PNG base64 (RGB)
