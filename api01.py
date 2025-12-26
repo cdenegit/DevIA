@@ -589,10 +589,9 @@ def analizar(req: Req):
             # imagen
             img_b64 = generar_heatmap(matriz, nombre)
         
-            # diagnóstico + semáforo
-            diagnostico, semaforo = diagnostico_indice(matriz, nombre)
-        
-            # objeto principal (para frontend)
+            # diagnósticos + semáforo + resumen
+            diag = diagnostico_indice_avanzado(matriz, nombre)
+
             indices[nombre] = {
                 "img_base64": generar_heatmap(matriz, nombre),
                 "diagnostico": diag["diagnostico_detallado"],   # PDF
@@ -604,8 +603,9 @@ def analizar(req: Req):
             indices_lista.append({
                 "nombre": nombre,
                 "imagen": img_b64,
-                "diagnostico": diagnostico,
-                "semaforo": semaforo
+                "diagnostico": diag["diagnostico_detallado"],  # para PDF / logs
+                "resumen": diag["resumen_web"],                # para UI
+                "color": diag["color"]                         # semáforo visual
             })
 
         # ================================
