@@ -588,24 +588,27 @@ def analizar(req: Req):
         
             # imagen
             img_b64 = generar_heatmap(matriz, nombre)
+            avg = float(np.nanmean(matriz))
         
             # diagnósticos + semáforo + resumen
             diag = diagnostico_indice(matriz, nombre)
-
+            
             indices[nombre] = {
                 "img_base64": generar_heatmap(matriz, nombre),
-                "diagnostico": diag["diagnostico_detallado"],   # PDF
-                "resumen": diag["resumen_web"],                 # Web
-                "color": diag["color"]
+                "diagnostico": diag["diagnostico_detallado"],  # PDF
+                "resumen": diag["resumen_web"],                # Web
+                "color": diag["color"],
+                "avg": diag["avg"]                             # valor numérico del índice
             }
-        
-            # opcional (si lo usas en PDF o logs)
+            
+            # opcional (PDF / logs)
             indices_lista.append({
                 "nombre": nombre,
                 "imagen": img_b64,
-                "diagnostico": diag["diagnostico_detallado"],  # para PDF / logs
-                "resumen": diag["resumen_web"],                # para UI
-                "color": diag["color"]                         # semáforo visual
+                "diagnostico": diag["diagnostico_detallado"],
+                "resumen": diag["resumen_web"],
+                "color": diag["color"],
+                "avg": diag["avg"]
             })
 
         # ================================
