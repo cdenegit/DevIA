@@ -415,22 +415,22 @@ def crear_pdf(indices):
     # Guardar imágenes temporales para ReportLab
     temp_files = []
     for nombre, data in indices.items():
-        story.append(Paragraph(f"<b>{nombre}</b>", styles['Heading2']))
+        story.append(Paragraph(f"<b>{nombre}</b>", styles['Heading1']))
+        story.append(Spacer(1, 12))
+    
         story.append(Paragraph(data.get("diagnostico", ""), styles['BodyText']))
-
+        story.append(Spacer(1, 12))
+    
         img_b64 = data.get("img_base64")
         if img_b64:
             img_bytes = base64.b64decode(img_b64)
             img_path = f"/tmp/{nombre}.png"
             with open(img_path, "wb") as f:
                 f.write(img_bytes)
-            temp_files.append(img_path)
-            # ajustar tamaño si muy grande
-            story.append(Image(img_path, width=300, height=300))
+            story.append(Image(img_path, width=350, height=350))
             story.append(Spacer(1, 20))
-        else:
-            story.append(Paragraph("Imagen no disponible", styles['BodyText']))
-            story.append(Spacer(1, 10))
+    
+        story.append(PageBreak())
 
     doc.build(story)
 
@@ -594,9 +594,10 @@ def analizar(req: Req):
         
             # objeto principal (para frontend)
             indices[nombre] = {
-                "img_base64": img_b64,
-                "diagnostico": diagnostico,
-                "semaforo": semaforo
+                "img_base64": generar_heatmap(matriz, nombre),
+                "diagnostico": diag["diagnostico_detallado"],   # PDF
+                "resumen": diag["resumen_web"],                 # Web
+                "color": diag["color"]
             }
         
             # opcional (si lo usas en PDF o logs)
