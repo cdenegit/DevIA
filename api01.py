@@ -292,15 +292,37 @@ def calc_indices(bandas):
 # Heatmap Base64 (optimizado, menor DPI / figsize)
 # =====================================
 def generar_heatmap(indice, nombre):
-    plt.figure(figsize=HEATMAP_FIGSIZE)
-    # clip values to [-1,1] for better color scaling and to avoid extreme outliers
+    import matplotlib
+    matplotlib.use("Agg")  # backend seguro para servidor
+
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from io import BytesIO
+    import base64
+
+    # Sanitizar y limitar rango
     arr = np.clip(indice, -1.0, 1.0)
-    plt.imshow(arr, cmap="RdYlGn", vmin=-1, vmax=1)
-    plt.colorbar()
-    plt.title(nombre)
+
+    # === Figura y Axes explícitos (CLAVE) ===
+    fig, ax = plt.subplots(figsize=HEATMAP_FIGSIZE)
+
+    im = ax.imshow(
+        arr,
+        cmap="RdYlGn",
+        vmin=-1,
+        vmax=1,
+        interpolation="nearest"
+    )
+
+    ax.set_title(nombre)
+    ax.axis("off")
+
+    fig.colorbar(im, ax=ax)
+
     buf = BytesIO()
-    plt.savefig(buf, format="png", dpi=HEATMAP_DPI, bbox_inches="tight")
-    plt.close()
+    fig.savefig(buf, format="png", dpi=HEATMAP_DPI, bbox_inches="tight")
+    plt.close(fig)  # cerrar SOLO esta figura
+
     buf.seek(0)
     return base64.b64encode(buf.read()).decode()
 
