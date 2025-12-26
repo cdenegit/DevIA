@@ -308,11 +308,12 @@ def generar_heatmap(indice, nombre):
 # Diagnóstico (igual)
 # =====================================
 def diagnostico_indice(indice, nombre):
-    import numpy as np
-
+    # Normalización defensiva
     indice = np.nan_to_num(indice, nan=0.0)
-    avg = float(np.mean(indice))
-    std = float(np.std(indice))
+
+    # === MEJORA CLAVE ===
+    avg = float(np.nanmean(indice))
+    std = float(np.nanstd(indice))
 
     # Clasificación por umbrales
     area_sana = np.sum(indice >= 0.5) / indice.size * 100
@@ -365,14 +366,13 @@ def diagnostico_indice(indice, nombre):
         f"- Área estresada: {area_estres:.1f}%"
     )
 
-    resumen_web = (
-        f"Estado general: {resumen.split('.')[0]}."
-    )
+    resumen_web = f"Estado general: {resumen.split('.')[0]}."
 
     return {
-        "diagnostico_detallado": diagnostico,
-        "resumen_web": resumen_web,
-        "color": color
+        "avg": avg,                              # ← ahora disponible para UI / PDF
+        "diagnostico_detallado": diagnostico,    # PDF
+        "resumen_web": resumen_web,              # Web
+        "color": color                           # semáforo
     }
 
 # =====================================
@@ -588,8 +588,7 @@ def analizar(req: Req):
         
             # imagen
             img_b64 = generar_heatmap(matriz, nombre)
-            avg = float(np.nanmean(matriz))
-        
+       
             # diagnósticos + semáforo + resumen
             diag = diagnostico_indice(matriz, nombre)
             
