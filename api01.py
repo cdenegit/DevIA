@@ -439,9 +439,9 @@ def crear_pdf(indices):
     for nombre, data in indices.items():
         story.append(Paragraph(f"<b>{nombre}</b>", styles['Heading1']))
         story.append(Spacer(1, 12))
-    
+        story.append(Paragraph(f"Valor medio: {data.get('valor', 'N/D')}",styles['BodyText']))    
         story.append(Paragraph(data.get("diagnostico", ""), styles['BodyText']))
-        story.append(Spacer(1, 12))
+        story.append(Spacer(1, 20))
     
         img_b64 = data.get("img_base64")
         if img_b64:
@@ -451,8 +451,8 @@ def crear_pdf(indices):
                 f.write(img_bytes)
             story.append(Image(img_path, width=350, height=350))
             story.append(Spacer(1, 20))
-    
-        story.append(PageBreak())
+            
+            story.append(PageBreak())
 
     doc.build(story)
 
