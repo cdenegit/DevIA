@@ -391,10 +391,13 @@ def diagnostico_indice(indice, nombre):
     resumen_web = f"Estado general: {resumen.split('.')[0]}."
 
     return {
-        "diagnostico_detallado": diagnostico,     # PDF
-        "resumen_web": resumen_web,               # Web
-        "color": color,                           # semáforo
-        "valor": avg,                             # ← ahora disponible para UI / PDF
+        "diagnostico_detallado": diagnostico,
+        "resumen_web": resumen_web,
+        "color": color,
+    
+        # métricas numéricas
+        "avg": avg,
+        "std": std,
         "area_sana": area_sana,
         "area_media": area_media,
         "area_estres": area_estres
