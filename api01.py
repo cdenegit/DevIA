@@ -385,7 +385,7 @@ def diagnostico_indice(indice, nombre):
         f"<b>Distribución espacial:</b><br/>"
         f"- Área saludable: {area_sana:.1f}%<br/>"
         f"- Área moderada: {area_media:.1f}%<br/>"
-        f"- Área estresada: {area_estres:.1f}%"
+        f"- Á rea estresada: {area_estres:.1f}%"
     )
 
     resumen_web = f"Estado general: {resumen.split('.')[0]}."
@@ -624,7 +624,12 @@ def analizar(req: Req):
                 "diagnostico": diag["diagnostico_detallado"],  # PDF
                 "resumen": diag["resumen_web"],                # Web
                 "color": diag["color"],
-                "avg": diag["avg"]                             # valor numérico del índice
+                # métricas numéricos
+                "avg": diag["avg"],
+                "std": diag["std"],
+                "area_sana": diag["area_sana"],
+                "area_media": diag["area_media"],
+                "area_estres": diag["area_estres"]
             }
             
             # opcional (PDF / logs)
@@ -634,7 +639,12 @@ def analizar(req: Req):
                 "diagnostico": diag["diagnostico_detallado"],
                 "resumen": diag["resumen_web"],
                 "color": diag["color"],
-                "avg": diag["avg"]
+                # métricas numéricos
+                "avg": diag["avg"],
+                "std": diag["std"],
+                "area_sana": diag["area_sana"],
+                "area_media": diag["area_media"],
+                "area_estres": diag["area_estres"]
             })
 
         # ================================
