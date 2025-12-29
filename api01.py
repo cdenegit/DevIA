@@ -23,8 +23,18 @@ import uvicorn
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Image, Spacer, PageBreak
 from reportlab.lib.styles import getSampleStyleSheet
+from fastapi import FastAPI
 
+app = FastAPI()
 
+@app.get("/")
+def healthcheck():
+    return {"status": "ok"}
+
+@app.get("/health")
+def health():
+    return {"ok": True}
+    
 # =====================================
 # Logging básico
 # =====================================
