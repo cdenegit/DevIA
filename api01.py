@@ -27,6 +27,12 @@ from fastapi import FastAPI
 
 app = FastAPI()
 
+@app.on_event("startup")
+def warmup():
+    import matplotlib.pyplot as plt
+    plt.figure()
+    plt.close()
+
 @app.get("/")
 def healthcheck():
     return {"status": "ok"}
