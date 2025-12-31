@@ -25,22 +25,7 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Image, Spacer, Page
 from reportlab.lib.styles import getSampleStyleSheet
 from fastapi import FastAPI
 
-app = FastAPI()
-
-@app.on_event("startup")
-def warmup():
-    import matplotlib.pyplot as plt
-    plt.figure()
-    plt.close()
-
-@app.get("/")
-def healthcheck():
-    return {"status": "ok"}
-
-@app.get("/health")
-def health():
-    return {"ok": True}
-    
+  
 # =====================================
 # Logging básico
 # =====================================
