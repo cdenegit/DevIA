@@ -47,12 +47,6 @@ async def startup():
     import matplotlib
     matplotlib.use("Agg")
     READY = True
-
-# =========================
-# REQUEST
-# =========================
-class Req(BaseModel):
-    datos: dic
   
 # =====================================
 # Logging básico
