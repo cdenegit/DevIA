@@ -9,6 +9,10 @@ from sentinelhub import (
     SentinelHubRequest, MimeType, bbox_to_dimensions
 )
 from shapely.geometry import shape, mapping
+import numpy as np
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 from io import BytesIO
 import base64
 import uvicorn
@@ -22,31 +26,35 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 import asyncio
 import time
-
+import logging
 # =====================================
 # FastAPI
 # =====================================
 app = FastAPI()
+log = logging.getLogger("eo-microservice")
 
-class Req(BaseModel):
-    geojson: str
-    fecha_ini: str
-    fecha_fin: str
-
-# =========================
-# FLAG DE ARRANQUE
-# =========================
 READY = False
-
+STARTUP_ERROR = None
 @app.on_event("startup")
 async def startup():
-    global READY
-    # importa aquí TODO lo pesado
-    import numpy as np
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    READY = True
+    global READY, STARTUP_ERROR
+
+    try:
+        # Imports críticos (solo para validar entorno)
+        import numpy as np
+        import matplotlib
+        matplotlib.use("Agg")
+
+        # Warm-up mínimo y seguro
+        _ = np.zeros((2, 2)).mean()
+
+        READY = True
+        log.info("Microservicio listo (startup OK)")
+
+    except Exception as e:
+        STARTUP_ERROR = str(e)
+        READY = False
+        log.error(f"Error en startup: {STARTUP_ERROR}")
   
 # =====================================
 # Logging básico
@@ -133,6 +141,7 @@ def buscar_imagenes(geom, fecha_ini, fecha_fin, max_items=3):
     Devuelve lista con la primera imagen válida encontrada: [arr] donde arr es numpy array (H, W, bands).
     Si no encuentra ninguna, devuelve [].
     """
+    import numpy as np
     # Logs iniciales
     logger.info("fecha_ini: %s", fecha_ini)
     logger.info("fecha_fin: %s", fecha_fin)
