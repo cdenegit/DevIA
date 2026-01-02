@@ -26,41 +26,29 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 import asyncio
 import time
-import logging
+
 # =====================================
 # FastAPI
 # =====================================
 app = FastAPI()
-log = logging.getLogger("eo-microservice")
-
-READY = False
-STARTUP_ERROR = None
 @app.on_event("startup")
-async def startup():
-    global READY, STARTUP_ERROR
+def warmup():
+    import matplotlib.pyplot as plt
+    plt.figure()
+    plt.close()
 
-    try:
-        # Imports críticos (solo para validar entorno)
-        import numpy as np
-        import matplotlib
-        matplotlib.use("Agg")
+@app.get("/")
+def healthcheck():
+    return {"status": "ok"}
 
-        # Warm-up mínimo y seguro
-        _ = np.zeros((2, 2)).mean()
-
-        READY = True
-        log.info("Microservicio listo (startup OK)")
-
-    except Exception as e:
-        STARTUP_ERROR = str(e)
-        READY = False
-        log.error(f"Error en startup: {STARTUP_ERROR}")
-
+@app.get("/health")
+def health():
+    return {"ok": True}
+    
 class Req(BaseModel):
-    geojson: dict
+    geojson: str
     fecha_ini: str
     fecha_fin: str
-    opcion: str  
 # =====================================
 # Logging básico
 # =====================================
@@ -583,12 +571,7 @@ def crear_pdf_avanzado(indices, rgb_b64, metadata):
 # ENDPOINT PRINCIPAL optimizado + FIX SHAPELY (ahora retorna productos)
 # =====================================
 @app.post("/analizar")
-async def analizar(req: Req):
-    if not READY:
-        raise HTTPException(
-            status_code=503,
-            detail="Microservicio inicializando, intente nuevamente"
-        )
+def analizar(req: Req):
     try:
         # ================================
         # 1) Leer GeoJSON
