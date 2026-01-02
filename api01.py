@@ -1,5 +1,3 @@
-from fastapi import FastAPI, Response, HTTPException
-from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 import json
 import os
@@ -11,9 +9,6 @@ from sentinelhub import (
     SentinelHubRequest, MimeType, bbox_to_dimensions
 )
 from shapely.geometry import shape, mapping
-import numpy as np
-import matplotlib
-matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from io import BytesIO
 import base64
@@ -23,8 +18,30 @@ import uvicorn
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Image, Spacer, PageBreak
 from reportlab.lib.styles import getSampleStyleSheet
-from fastapi import FastAPI
+from fastapi import FastAPI, Response, HTTPException, HTMLResponse
+from pydantic import BaseModel
+import asyncio
+import time
 
+# =========================
+# FLAG DE ARRANQUE
+# =========================
+READY = False
+
+@app.on_event("startup")
+async def startup():
+    global READY
+    # importa aquí TODO lo pesado
+    import numpy
+    import matplotlib
+    matplotlib.use("Agg")
+    READY = True
+
+# =========================
+# REQUEST
+# =========================
+class Req(BaseModel):
+    datos: dic
   
 # =====================================
 # Logging básico
@@ -564,6 +581,9 @@ def analizar(req: Req):
         # ================================
         geo = json.loads(req.geojson)
         geom = shape(geo)
+        
+        if not READY:
+            raise HTTPException(503, "Servicio inicializando")
 
         if not geom.is_valid:
             geom = geom.buffer(0)
