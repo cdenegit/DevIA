@@ -578,9 +578,6 @@ def analizar(req: Req):
         # ================================
         geo = json.loads(req.geojson)
         geom = shape(geo)
-        
-        if not READY:
-            raise HTTPException(503, "Servicio inicializando")
 
         if not geom.is_valid:
             geom = geom.buffer(0)
