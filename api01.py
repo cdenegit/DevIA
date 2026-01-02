@@ -24,6 +24,16 @@ from pydantic import BaseModel
 import asyncio
 import time
 
+# =====================================
+# FastAPI
+# =====================================
+app = FastAPI()
+
+class Req(BaseModel):
+    geojson: str
+    fecha_ini: str
+    fecha_fin: str
+
 # =========================
 # FLAG DE ARRANQUE
 # =========================
@@ -49,16 +59,6 @@ class Req(BaseModel):
 # =====================================
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("eo-microservice")
-
-# =====================================
-# FastAPI
-# =====================================
-app = FastAPI()
-
-class Req(BaseModel):
-    geojson: str
-    fecha_ini: str
-    fecha_fin: str
 
 # =====================================
 # SentinelHub OAuth2 (tus credenciales)
