@@ -55,7 +55,12 @@ async def startup():
         STARTUP_ERROR = str(e)
         READY = False
         log.error(f"Error en startup: {STARTUP_ERROR}")
-  
+
+class Req(BaseModel):
+    geojson: dict
+    fecha_ini: str
+    fecha_fin: str
+    opcion: str  
 # =====================================
 # Logging básico
 # =====================================
@@ -578,7 +583,12 @@ def crear_pdf_avanzado(indices, rgb_b64, metadata):
 # ENDPOINT PRINCIPAL optimizado + FIX SHAPELY (ahora retorna productos)
 # =====================================
 @app.post("/analizar")
-def analizar(req: Req):
+async def analizar(req: Req):
+    if not READY:
+    raise HTTPException(
+        status_code=503,
+        detail="Microservicio inicializando, intente nuevamente"
+    )
     try:
         # ================================
         # 1) Leer GeoJSON
