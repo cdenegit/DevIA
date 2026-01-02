@@ -18,7 +18,8 @@ import uvicorn
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Image, Spacer, PageBreak
 from reportlab.lib.styles import getSampleStyleSheet
-from fastapi import FastAPI, Response, HTTPException, HTMLResponse
+from fastapi import FastAPI, Response, HTTPException
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 import asyncio
 import time
