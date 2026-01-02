@@ -9,7 +9,6 @@ from sentinelhub import (
     SentinelHubRequest, MimeType, bbox_to_dimensions
 )
 from shapely.geometry import shape, mapping
-import matplotlib.pyplot as plt
 from io import BytesIO
 import base64
 import uvicorn
@@ -43,9 +42,10 @@ READY = False
 async def startup():
     global READY
     # importa aquí TODO lo pesado
-    import numpy
+    import numpy as np
     import matplotlib
     matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
     READY = True
   
 # =====================================
