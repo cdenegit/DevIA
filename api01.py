@@ -585,10 +585,10 @@ def crear_pdf_avanzado(indices, rgb_b64, metadata):
 @app.post("/analizar")
 async def analizar(req: Req):
     if not READY:
-    raise HTTPException(
-        status_code=503,
-        detail="Microservicio inicializando, intente nuevamente"
-    )
+        raise HTTPException(
+            status_code=503,
+            detail="Microservicio inicializando, intente nuevamente"
+        )
     try:
         # ================================
         # 1) Leer GeoJSON
