@@ -55,8 +55,8 @@ logger = logging.getLogger("eo-microservice")
 # =====================================
 config = SHConfig()
 config.download_timeout_seconds = 150  # ejemplo
-config.sh_client_id = os.getenv("SH_CLIENT_ID", "51f7ce9b-3718-4960-99b6-65f3f963611d")
-config.sh_client_secret = os.getenv("SH_CLIENT_SECRET", "CF7oglmD9yLwefP3Od30Tg8ZBuciiMmF")
+config.sh_client_id = os.getenv("SH_CLIENT_ID", "b5600530-1378-407f-ae13-47dadc0d857d")
+config.sh_client_secret = os.getenv("SH_CLIENT_SECRET", "fDo0476XLCdOzBS9v1JVqTnGF3DjIbIf")
 config.sh_base_url = "https://services.sentinel-hub.com"
 
 # =====================================
