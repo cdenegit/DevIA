@@ -30,15 +30,6 @@ import time
 # =====================================
 # FastAPI
 # =====================================
-app = FastAPI()
-
-@app.get("/")
-def healthcheck():
-    return {"status": "ok"}
-
-@app.get("/health")
-def health():
-    return {"ok": True}
     
 class Req(BaseModel):
     geojson: str
