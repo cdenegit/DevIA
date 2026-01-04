@@ -30,7 +30,8 @@ import time
 # =====================================
 # FastAPI
 # =====================================
-    
+app = FastAPI()
+
 class Req(BaseModel):
     geojson: str
     fecha_ini: str
