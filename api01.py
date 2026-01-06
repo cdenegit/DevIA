@@ -557,6 +557,11 @@ def crear_pdf_avanzado(indices, rgb_b64, metadata):
 # =====================================
 # ENDPOINT PRINCIPAL optimizado + FIX SHAPELY (ahora retorna productos)
 # =====================================
+@app.post("/iniciar")
+def iniciar(req: Req):
+    geo = json.loads(req.geojson)
+    return True
+    
 @app.post("/analizar")
 def analizar(req: Req):
     try:
