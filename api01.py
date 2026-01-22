@@ -327,7 +327,8 @@ def generar_heatmap(indice, nombre, geom=None):
             x = (lon - minx) / (maxx - minx) * w
             y = h - (lat - miny) / (maxy - miny) * h
             return x, y
-
+            
+        print(">>> DIBUJANDO GEOJSON EN HEATMAP", nombre)
         xs, ys = geom.exterior.xy
         px = [lonlat_to_px(x, y)[0] for x, y in zip(xs, ys)]
         py = [lonlat_to_px(x, y)[1] for x, y in zip(xs, ys)]
