@@ -737,23 +737,15 @@ def analizar(req: Req):
 # A) Generar RGB + overlay GeoJSON
 # ================================
 
-def lonlat_to_pixel(lon, lat, bbox, width, height):
-    minx, miny, maxx, maxy = bbox
-
-    x = (lon - minx) / (maxx - minx) * width
-    y = (maxy - lat) / (maxy - miny) * height  # invert Y
-
-    return x, y
-
 def generar_rgb_con_geojson(arr01, geom):
     """
     arr01: ndarray HxW or HxWx3 normalizado (0..1)
     geom: shapely Polygon en lon/lat
     """
 
-    print(">>> USANDO BOUNDS: ", geom.bounds, "IMG SHAPE:", arr01.shape)
     h, w = arr01.shape[:2]
     minx, miny, maxx, maxy = geom.bounds
+    print(">>> USANDO BOUNDS: ", geom.bounds, "IMG SHAPE:", arr01.shape)
 
     def lonlat_to_pixel(lon, lat):
         x = (lon - minx) / (maxx - minx) * w
