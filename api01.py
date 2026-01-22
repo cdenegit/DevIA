@@ -668,7 +668,7 @@ def analizar(req: Req):
         g = stretch01(bandas[1])
         b = stretch01(bandas[0])
         rgb = np.dstack([r, g, b])
-        bbox_vals = { "minx": min_lon, "miny": min_lat, "maxx": max_lon, "maxy": max_lat }
+        bbox_vals = geom.bounds
 
         buf = BytesIO()
         plt.imsave(buf, (rgb * 255).astype(np.uint8), format="png")
