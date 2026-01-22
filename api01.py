@@ -293,19 +293,17 @@ def calc_indices(bandas):
 # =====================================
 # Heatmap Base64 (optimizado, menor DPI / figsize)
 # =====================================
-def generar_heatmap(indice, nombre):
+def generar_heatmap(indice, nombre, geom=None):
     import matplotlib
-    matplotlib.use("Agg")  # backend seguro para servidor
+    matplotlib.use("Agg")
 
     import matplotlib.pyplot as plt
     import numpy as np
     from io import BytesIO
     import base64
 
-    # Sanitizar y limitar rango
     arr = np.clip(indice, -1.0, 1.0)
 
-    # === Figura y Axes explícitos (CLAVE) ===
     fig, ax = plt.subplots(figsize=HEATMAP_FIGSIZE)
 
     im = ax.imshow(
@@ -318,18 +316,32 @@ def generar_heatmap(indice, nombre):
 
     ax.set_title(nombre)
     ax.axis("off")
-
     fig.colorbar(im, ax=ax)
+
+    # === Inluir Bordes en la Imagen del INDICE) ===
+    if geom is not None:
+        h, w = arr.shape
+        minx, miny, maxx, maxy = geom.bounds
+
+        def lonlat_to_px(lon, lat):
+            x = (lon - minx) / (maxx - minx) * w
+            y = h - (lat - miny) / (maxy - miny) * h
+            return x, y
+
+        xs, ys = geom.exterior.xy
+        px = [lonlat_to_px(x, y)[0] for x, y in zip(xs, ys)]
+        py = [lonlat_to_px(x, y)[1] for x, y in zip(xs, ys)]
+        ax.plot(px, py, color="red", linewidth=2)
 
     buf = BytesIO()
     fig.savefig(buf, format="png", dpi=HEATMAP_DPI, bbox_inches="tight")
-    plt.close(fig)  # cerrar SOLO esta figura
+    plt.close(fig)
 
     buf.seek(0)
     return base64.b64encode(buf.read()).decode()
 
 # =====================================
-# Diagnóstico (igual)
+# Diagnóstico 
 # =====================================
 def diagnostico_indice(indice, nombre):
     # Normalización defensiva
@@ -627,7 +639,7 @@ def analizar(req: Req):
             diag = diagnostico_indice(matriz, nombre)
             
             indices[nombre] = {
-                "img_base64": generar_heatmap(matriz, nombre),
+                "img_base64": generar_heatmap(matriz, nombre, geom),
                 "diagnostico": diag["diagnostico_detallado"],  # PDF
                 "resumen": diag["resumen_web"],                # Web
                 "color": diag["color"],
@@ -674,7 +686,6 @@ def analizar(req: Req):
         plt.imsave(buf, (rgb * 255).astype(np.uint8), format="png")
         buf.seek(0)
         rgb_b64 = base64.b64encode(buf.read()).decode()
-        img_base64 = generar_rgb_con_geojson( rgb, geom )
 
         # ================================
         # 6) Metadata  (SIEMPRE ANTES DEL PDF)
@@ -732,43 +743,6 @@ def analizar(req: Req):
             "pdf_base64": None,
             "metadata": {}
         }
-
-# ================================
-# A) Generar RGB + overlay GeoJSON
-# ================================
-
-def generar_rgb_con_geojson(arr01, geom):
-    """
-    arr01: ndarray HxW or HxWx3 normalizado (0..1)
-    geom: shapely Polygon en lon/lat
-    """
-
-    h, w = arr01.shape[:2]
-    minx, miny, maxx, maxy = geom.bounds
-    print(">>> USANDO BOUNDS: ", geom.bounds, "IMG SHAPE:", arr01.shape)
-
-    def lonlat_to_pixel(lon, lat):
-        x = (lon - minx) / (maxx - minx) * w
-        y = (maxy - lat) / (maxy - miny) * h
-        return x, y
-
-    fig, ax = plt.subplots(figsize=(6, 6))
-    ax.imshow(arr01, origin="upper")
-    ax.set_axis_off()
-
-    xs_geo, ys_geo = geom.exterior.xy
-    xs_px, ys_px = zip(*[
-        lonlat_to_pixel(x, y) for x, y in zip(xs_geo, ys_geo)
-    ])
-
-    ax.plot(xs_px, ys_px, color="red", linewidth=2)
-
-    buf = BytesIO()
-    plt.savefig(buf, format="png", dpi=150, bbox_inches="tight", pad_inches=0)
-    plt.close(fig)
-    buf.seek(0)
-
-    return base64.b64encode(buf.read()).decode()
 
 # Make sure server start at the bottom of your file (if running directly)
 if __name__ == "__main__":
