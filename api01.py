@@ -736,20 +736,38 @@ def analizar(req: Req):
 # A) Generar RGB + overlay GeoJSON
 # ================================
 
-def generar_rgb_con_geojson(rgb, geom):
+def generar_rgb_con_geojson(rgb, geom, bbox):
+    """
+    rgb  : numpy array HxWx3 (0..255 o 0..1)
+    geom : shapely Polygon (finca)
+    bbox : dict con minx, miny, maxx, maxy (extent de la imagen)
+    """
+    h, w, _ = rgb.shape
+
     fig, ax = plt.subplots(figsize=(6, 6))
     ax.imshow(rgb)
-    
-    if geom.geom_type == "Polygon":
-        xs, ys = geom.exterior.xy
-        ax.plot(xs, ys, color="red", linewidth=2)
-
     ax.set_axis_off()
 
+    if geom and geom.geom_type == "Polygon":
+        xs, ys = geom.exterior.xy
+
+        # === conversión geo → pixel ===
+        px = [
+            (x - bbox["minx"]) / (bbox["maxx"] - bbox["minx"]) * w
+            for x in xs
+        ]
+        py = [
+            h - (y - bbox["miny"]) / (bbox["maxy"] - bbox["miny"]) * h
+            for y in ys
+        ]
+
+        ax.plot(px, py, color="white", linewidth=2)
+
     buf = BytesIO()
-    plt.savefig(buf, format="png", dpi=150, bbox_inches="tight")
-    plt.close()
+    plt.savefig(buf, format="png", dpi=150, bbox_inches="tight", pad_inches=0)
+    plt.close(fig)
     buf.seek(0)
+
     return base64.b64encode(buf.read()).decode()
 
 # Make sure server start at the bottom of your file (if running directly)
