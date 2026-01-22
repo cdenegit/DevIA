@@ -741,7 +741,7 @@ def analizar(req: Req):
 # A) Generar RGB + overlay GeoJSON
 # ================================
 
-generar_rgb_con_geojson(rgb, geom, bbox):
+def generar_rgb_con_geojson(rgb, geom, bbox):
     """
     rgb  : numpy array HxWx3 (0..255 o 0..1)
     geom : shapely Polygon (finca)
