@@ -332,7 +332,7 @@ def generar_heatmap(indice, nombre, geom=None):
         xs, ys = geom.exterior.xy
         px = [lonlat_to_px(x, y)[0] for x, y in zip(xs, ys)]
         py = [lonlat_to_px(x, y)[1] for x, y in zip(xs, ys)]
-        ax.plot(px, py, color="red", linewidth=2)
+        ax.plot(px, py, color="black", linewidth=1.2, linestyle="--", alpha=0.9)
 
     buf = BytesIO()
     fig.savefig(buf, format="png", dpi=HEATMAP_DPI, bbox_inches="tight")
