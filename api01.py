@@ -674,12 +674,7 @@ def analizar(req: Req):
         plt.imsave(buf, (rgb * 255).astype(np.uint8), format="png")
         buf.seek(0)
         rgb_b64 = base64.b64encode(buf.read()).decode()
-        img_base64 = generar_rgb_con_geojson(rgb, geom,  {
-            "minx": bbox_vals[0],
-            "miny": bbox_vals[1],
-            "maxx": bbox_vals[2],
-            "maxy": bbox_vals[3] }
-        )
+        img_base64 = generar_rgb_con_geojson( rgb, geom )
 
         # ================================
         # 6) Metadata  (SIEMPRE ANTES DEL PDF)
