@@ -673,7 +673,12 @@ def analizar(req: Req):
         plt.imsave(buf, (rgb * 255).astype(np.uint8), format="png")
         buf.seek(0)
         rgb_b64 = base64.b64encode(buf.read()).decode()
-        rgb_overlay_b64 = generar_rgb_con_geojson(rgb, geom)
+        img_base64 = generar_rgb_con_geojson(rgb, geom,  {
+            "minx": bbox_vals[0],
+            "miny": bbox_vals[1],
+            "maxx": bbox_vals[2],
+            "maxy": bbox_vals[3] }
+        )
 
         # ================================
         # 6) Metadata  (SIEMPRE ANTES DEL PDF)
@@ -736,7 +741,7 @@ def analizar(req: Req):
 # A) Generar RGB + overlay GeoJSON
 # ================================
 
-def generar_rgb_con_geojson(rgb, geom, bbox):
+generar_rgb_con_geojson(rgb, geom, bbox):
     """
     rgb  : numpy array HxWx3 (0..255 o 0..1)
     geom : shapely Polygon (finca)
