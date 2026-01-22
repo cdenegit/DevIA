@@ -737,32 +737,43 @@ def analizar(req: Req):
 # A) Generar RGB + overlay GeoJSON
 # ================================
 
-def generar_rgb_con_geojson(rgb, geom):
+def lonlat_to_pixel(lon, lat, bbox, width, height):
+    minx, miny, maxx, maxy = bbox
+
+    x = (lon - minx) / (maxx - minx) * width
+    y = (maxy - lat) / (maxy - miny) * height  # invert Y
+
+    return x, y
+
+def generar_rgb_con_geojson(arr01, geom):
     """
-    rgb: numpy array HxWx3 (0..1)
-    geom: shapely Polygon (lon/lat)
+    arr01: ndarray HxW or HxWx3 normalizado (0..1)
+    geom: shapely Polygon en lon/lat
     """
+    h, w = arr01.shape[:2]
     minx, miny, maxx, maxy = geom.bounds
 
+    def lonlat_to_pixel(lon, lat):
+        x = (lon - minx) / (maxx - minx) * w
+        y = (maxy - lat) / (maxy - miny) * h
+        return x, y
+
     fig, ax = plt.subplots(figsize=(6, 6))
-
-    ax.imshow(
-        rgb,
-        extent=(minx, maxx, miny, maxy),  # CLAVE
-        origin="upper"
-    )
-
-    if geom.geom_type == "Polygon":
-        xs, ys = geom.exterior.xy
-        ax.plot(xs, ys, color="red", linewidth=2)
-
+    ax.imshow(arr01, origin="upper")
     ax.set_axis_off()
+
+    xs_geo, ys_geo = geom.exterior.xy
+    xs_px, ys_px = zip(*[
+        lonlat_to_pixel(x, y) for x, y in zip(xs_geo, ys_geo)
+    ])
+
+    ax.plot(xs_px, ys_px, color="red", linewidth=2)
 
     buf = BytesIO()
     plt.savefig(buf, format="png", dpi=150, bbox_inches="tight", pad_inches=0)
     plt.close(fig)
-
     buf.seek(0)
+
     return base64.b64encode(buf.read()).decode()
 
 # Make sure server start at the bottom of your file (if running directly)
