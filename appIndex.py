@@ -15,7 +15,7 @@ class AnalisisIndexRequest(BaseModel):
     finca_name: str
     geojson: str
     index_name: str
-    $aspctos_inv: str
+    aspctos_inv: str
     file_path: str   # path absoluto o relativo dentro del server
     usuario: str | None = None
 
