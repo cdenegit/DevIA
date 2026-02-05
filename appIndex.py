@@ -12,8 +12,9 @@ app = FastAPI()
 # =========================
 
 class AnalisisIndexRequest(BaseModel):
-    index_name: str
+    finca_name: str
     geojson: str
+    index_name: str
     $aspctos_inv: str
     file_path: str   # path absoluto o relativo dentro del server
     usuario: str | None = None
@@ -201,9 +202,11 @@ Responde de forma técnica, clara y orientada a toma de decisiones.
 @app.post("/analisis_index")
 def analisis_index(req: AnalisisIndexRequest):
 
+    finca_name = req.finca_name 
     index_name = req.index_name.lower()
     aspctos_inv = req.aspctos_inv
     file_path = req.file_path
+    usuario = req.usuario
 
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Archivo no encontrado")
