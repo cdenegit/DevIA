@@ -12,7 +12,7 @@ app = FastAPI()
 # =========================
 
 class AnalisisIndexRequest(BaseModel):
-    finca_name: str
+    nmbre_fnca: str
     geojson: str
     index_name: str
     aspctos_inv: str
