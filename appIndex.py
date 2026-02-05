@@ -1,7 +1,11 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Response, HTTPException
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
+import uvicorn
 import os
 import numpy as np
+
+app = FastAPI()
 
 # =========================
 # 📥 Request schema
