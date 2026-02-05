@@ -233,5 +233,7 @@ def analisis_index(req: AnalisisIndexRequest):
 
     return resultado
 
-
+# Make sure server start at the bottom of your file (if running directly)
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
 
