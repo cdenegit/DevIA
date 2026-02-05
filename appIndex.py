@@ -17,7 +17,6 @@ class AnalisisIndexRequest(BaseModel):
     index_name: str
     aspctos_inv: str
     file_path: str   # path absoluto o relativo dentro del server
-    usuario: str | None = None
 
 def leer_raster_gdal(path, bandas):
     """
