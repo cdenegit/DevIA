@@ -196,12 +196,14 @@ Responde de forma técnica, clara y orientada a toma de decisiones.
 def analisis_index(req: AnalisisIndexRequest):
 
     index_name = req.index_name.lower()
+    aspctos_inv = req.aspctos_inv
     file_path = req.file_path
 
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Archivo no encontrado")
 
     file_ext = detectar_tipo_archivo(file_path)
+    geo = json.loads(req.geojson)
 
     # -------------------------
     # CASE INDICES
