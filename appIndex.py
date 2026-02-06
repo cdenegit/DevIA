@@ -1,9 +1,10 @@
-from fastapi import FastAPI, Response, HTTPException
-from fastapi import UploadFile, File, Form
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 import uvicorn
 import os
+import json
+import tempfile
 import numpy as np
 
 app = FastAPI()
@@ -201,13 +202,22 @@ Responde de forma técnica, clara y orientada a toma de decisiones.
 
 @app.post("/analisis_index")
 async def analisis_index(
-    finca_name = req.nmbre_fnca 
-    index_name = req.index_name.lower()
-    aspctos_inv = req.aspctos_inv
+    nmbre_fnca: str = Form(...),
+    geojson: str = Form(...),
+    index_name: str = Form(...),
+    aspctos_inv: str = Form(...),
     file: UploadFile = File(...)
-    ):
+):
 
-    import tempfile
+    # -------------------------
+    # Normalización básica
+    # -------------------------
+
+    index_name = index_name.lower()
+
+    # -------------------------
+    # Guardar archivo temporal
+    # -------------------------
 
     suffix = os.path.splitext(file.filename)[1]
 
@@ -215,12 +225,17 @@ async def analisis_index(
         tmp.write(await file.read())
         file_path = tmp.name
 
-    file_ext = detectar_tipo_archivo(file_path)
-    
+    # -------------------------
+    # Validaciones
+    # -------------------------
+
     try:
         geo = json.loads(geojson)
     except json.JSONDecodeError:
-        raise HTTPException(400, "GeoJSON inválido")
+        os.remove(file_path)
+        raise HTTPException(status_code=400, detail="GeoJSON inválido")
+
+    file_ext = detectar_tipo_archivo(file_path)
 
     # -------------------------
     # CASE INDICES
