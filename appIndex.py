@@ -216,7 +216,7 @@ async def analisis_index(
     aspctos_inv: str = Form(...),
     file: UploadFile = File(...)
     ):
-logger.info("🚀 /analisis_index INVOCADO")
+    logger.info("🚀 /analisis_index INVOCADO")
     # -------------------------
     # Normalización básica
     # -------------------------
