@@ -6,8 +6,16 @@ import os
 import json
 import tempfile
 import numpy as np
+import logging
 
 app = FastAPI()
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s"
+)
+
+logger = logging.getLogger("analisis_index")
 
 # =========================
 # 📥 Request schema
@@ -208,23 +216,27 @@ async def analisis_index(
     aspctos_inv: str = Form(...),
     file: UploadFile = File(...)
     ):
-
+logger.info("🚀 /analisis_index INVOCADO")
     # -------------------------
     # Normalización básica
     # -------------------------
 
     index_name = index_name.lower()
-
+    logger.info(f"📌 Finca: {nmbre_fnca}")
+    logger.info(f"📌 Index: {index_name}")
+    logger.info(f"📌 Archivo: {file.filename if file else 'NO FILE'}")
+    logger.info(f"📌 GeoJSON length: {len(geojson)}")
     # -------------------------
     # Guardar archivo temporal
     # -------------------------
-
+    logger.info("💾 Guardando archivo temporal")
     suffix = os.path.splitext(file.filename)[1]
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp.write(await file.read())
         file_path = tmp.name
-
+        
+    logger.info(f"✅ Archivo guardado en {file_path}")
     # -------------------------
     # Validaciones
     # -------------------------
