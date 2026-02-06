@@ -207,7 +207,7 @@ async def analisis_index(
     index_name: str = Form(...),
     aspctos_inv: str = Form(...),
     file: UploadFile = File(...)
-):
+    ):
 
     # -------------------------
     # Normalización básica
