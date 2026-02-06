@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Response, HTTPException
+from fastapi import UploadFile, File, Form
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 import uvicorn
@@ -199,12 +200,12 @@ Responde de forma técnica, clara y orientada a toma de decisiones.
 # =========================
 
 @app.post("/analisis_index")
-def analisis_index(req: AnalisisIndexRequest):    
-
+async def analisis_index(
     finca_name = req.nmbre_fnca 
     index_name = req.index_name.lower()
     aspctos_inv = req.aspctos_inv
     file: UploadFile = File(...)
+    ):
 
     import tempfile
 
