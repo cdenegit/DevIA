@@ -199,19 +199,27 @@ Responde de forma técnica, clara y orientada a toma de decisiones.
 # =========================
 
 @app.post("/analisis_index")
-def analisis_index(req: AnalisisIndexRequest):
+def analisis_index(req: AnalisisIndexRequest):    
 
-    finca_name = req.finca_name 
+    finca_name = req.nmbre_fnca 
     index_name = req.index_name.lower()
     aspctos_inv = req.aspctos_inv
-    file_path = req.file_path
-    usuario = req.usuario
+    file: UploadFile = File(...)
 
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Archivo no encontrado")
+    import tempfile
+
+    suffix = os.path.splitext(file.filename)[1]
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp.write(await file.read())
+        file_path = tmp.name
 
     file_ext = detectar_tipo_archivo(file_path)
-    geo = json.loads(req.geojson)
+    
+    try:
+        geo = json.loads(geojson)
+    except json.JSONDecodeError:
+        raise HTTPException(400, "GeoJSON inválido")
 
     # -------------------------
     # CASE INDICES
