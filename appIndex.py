@@ -286,23 +286,32 @@ async def analisis_index(
     file: UploadFile = File(...)
 ):
     # 1. Gestión de archivo
-    ext = os.path.splitext(file.filename)[1].lower()
-    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-        tmp.write(await file.read())
-        path = tmp.name
-
+# Crear un nombre único en la carpeta /tmp de Render
+    file_id = str(uuid.uuid4())
+    temp_path = os.path.join(tempfile.gettempdir(), f"{file_id}_{file.filename}")
+    
     try:
-        # 2. Lectura según tipo (GDAL, Científico o Simple)
+        # Guardar el archivo manualmente
+        content = await file.read()
+        with open(temp_path, "wb") as f:
+            f.write(content)
+            logger.info(f"✅ Archivo guardado en: {temp_path} ({len(content)} bytes)")
+        # 2. Lectura según tipo (GDAL, Científico o Simple) Lectura resiliente de bandas
+        b1 = src.read(1).astype('float32')
         if ext in ['.tif', '.tiff', '.jp2']:
             with rasterio.open(path) as src:
+                logger.info(f"📖 Rasterio abrió el archivo. Bandas: {src.count}")
                 # Lectura de bandas (B8=NIR, B4=RED)
-                b8 = src.read(1).astype('float32')
-                b4 = src.read(2).astype('float32') if src.count > 1 else b8
-                bandas = {"B08": b8, "B04": b4, "B03": b8, "B02": b8} # Fallbacks
+                "B08": b1,
+                "B04": src.read(2).astype('float32') if src.count >= 2 else b1,
+                "B03": src.read(3).astype('float32') if src.count >= 3 else b1,
+                "B02": src.read(4).astype('float32') if src.count >= 4 else b1,
+                "B05": src.read(5).astype('float32') if src.count >= 5 else b1
                 meta = {
                     "sensor": src.tags().get('SENSOR_ID', 'Satelital/Drone'),
                     "fecha": src.tags().get('ACQUISITION_DATE', 'Reciente'),
                     "resolucion_m": src.res[0],
+                    "ancho": src.width, "alto": src.height,
                     "area_m2": (src.bounds.right - src.bounds.left) * (src.bounds.top - src.bounds.bottom)
                 }
         else:
