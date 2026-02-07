@@ -105,6 +105,21 @@ def generar_prompt_experto(index_name, stats, meta, aspectos):
 
 def leer_raster_gdal(path):
     """Lee el raster intentando extraer bandas 1 y 2 (NIR/RED) con seguridad."""
+
+def leer_raster_gdal(path, bandas_solicitadas):
+    with rasterio.open(path) as src:
+        # --- CAMBIO EXACTO AQUÍ ---
+        # Leemos la banda 1 como base obligatoria
+        b1 = src.read(1).astype('float32')
+        
+        bandas = {
+            "B08": b1, # NIR (Asumimos banda 1 si es satelital básico)
+            "B04": src.read(2).astype('float32') if src.count >= 2 else b1,
+            "B03": src.read(3).astype('float32') if src.count >= 3 else b1,
+            "B02": src.read(4).astype('float32') if src.count >= 4 else b1,
+            "B05": src.read(5).astype('float32') if src.count >= 5 else b1
+        }
+    
     with rasterio.open(path) as src:
         # Extraer metadatos con seguridad (usando .get o validando existencia)
         tags = src.tags()
@@ -282,78 +297,90 @@ async def analisis_index(
     geojson: str = Form(...),
     index_name: str = Form(...),
     aspctos_inv: str = Form(...),
-    gemini_key: str = Form(...), # <-- RECIBIMOS LA LLAVE
+    gemini_key: str = Form(...),
     file: UploadFile = File(...)
 ):
-    # 1. Gestión de archivo
-# Crear un nombre único en la carpeta /tmp de Render
+# 1. Gestión de archivo con escritura física previa
     file_id = str(uuid.uuid4())
+    ext = os.path.splitext(file.filename)[1].lower()
     temp_path = os.path.join(tempfile.gettempdir(), f"{file_id}_{file.filename}")
     
     try:
-        # Guardar el archivo manualmente
+        # Guardar el archivo físicamente para que Rasterio no encuentre bloqueos
         content = await file.read()
         with open(temp_path, "wb") as f:
             f.write(content)
-            logger.info(f"✅ Archivo guardado en: {temp_path} ({len(content)} bytes)")
-        # 2. Lectura según tipo (GDAL, Científico o Simple) Lectura resiliente de bandas
-        b1 = src.read(1).astype('float32')
-        if ext in ['.tif', '.tiff', '.jp2']:
-            with rasterio.open(path) as src:
+        
+        logger.info(f"✅ Archivo guardado físicamente: {temp_path}")
+
+    # 2. Lectura según tipo (Detección y extracción unificada)
+        tipo_archivo = detectar_tipo_archivo(temp_path)
+        
+        if tipo_archivo == "raster_gdal":
+            # Usamos la lógica de bandas segura que ya definimos
+            with rasterio.open(temp_path) as src:
                 logger.info(f"📖 Rasterio abrió el archivo. Bandas: {src.count}")
-                # Lectura de bandas (B8=NIR, B4=RED)
-                "B08": src.read(1).astype('float32'),
-                "B04": src.read(2).astype('float32') if src.count >= 2 else b1,
-                "B03": src.read(3).astype('float32') if src.count >= 3 else b1,
-                "B02": src.read(4).astype('float32') if src.count >= 4 else b1,
-                "B05": src.read(5).astype('float32') if src.count >= 5 else b1
+                b1 = src.read(1).astype('float32')
+                bandas = {
+                    "B08": b1,
+                    "B04": src.read(2).astype('float32') if src.count >= 2 else b1,
+                    "B03": src.read(3).astype('float32') if src.count >= 3 else b1,
+                    "B02": src.read(4).astype('float32') if src.count >= 4 else b1,
+                    "B05": src.read(5).astype('float32') if src.count >= 5 else b1
+                }
                 meta = {
                     "sensor": src.tags().get('SENSOR_ID', 'Satelital/Drone'),
                     "fecha": src.tags().get('ACQUISITION_DATE', 'Reciente'),
-                    "resolucion_m": src.res[0],
+                    "resolucion_m": src.res[0] if src.res else 0,
                     "ancho": src.width, "alto": src.height,
-                    "area_m2": (src.bounds.right - src.bounds.left) * (src.bounds.top - src.bounds.bottom)
+                    "area_m2": (src.bounds.right - src.bounds.left) * (src.bounds.top - src.bounds.bottom) if src.bounds else 0
                 }
-        else:
-            # Lógica para PNG o Científico (Simplificada para brevedad)
-            img = Image.open(path).convert('RGB')
+
+        elif tipo_archivo == "raster_cientifico":
+            # Aquí llamas a tu función poderosa para NetCDF/HDF5
+            bandas, meta = leer_raster_cientifico(temp_path, ["B08", "B04", "B03", "B02"])
+
+        else: # imagen_simple (PNG/JPG)
+            # Aquí aplicas la lógica de Image.open que tenías preparada
+            img = Image.open(temp_path).convert('RGB')
             arr = np.array(img).astype('float32') / 255.0
             bandas = {"B08": arr[:,:,1]*1.2, "B04": arr[:,:,0]} 
-            meta = {"sensor": "Cámara Convencional", "area_m2": 0, "resolucion_m": 0}
+            meta = {"sensor": "Cámara Convencional", "area_m2": 0, "resolucion_m": 0, "ancho": arr.shape[1], "alto": arr.shape[0]}
 
         meta["finca"] = nmbre_fnca
 
-        # 3. Cálculo de Índice (Álgebra)
-        eps = 1e-10
-        if index_name.lower() == "ndvi":
-            idx_map = (bandas["B08"] - bandas["B04"]) / (bandas["B08"] + bandas["B04"] + eps)
-        else:
-            # Otros índices aquí...
-            idx_map = bandas["B08"] - bandas["B04"]
+        # 3. CÁLCULO UNIFICADO (Usando tu función de álgebra corregida)
+        # Esta función ya maneja NDVI, EVI, MSAVI, etc.
+        idx_map = ejecutar_calculo_indice(bandas, index_name)
 
-        # 4. Estadísticas y Muestreo
+        # 4. ESTADÍSTICAS Y MUESTREO
+        # Limpieza de valores para evitar errores en el JSON final
         valores_limpios = idx_map[~np.isnan(idx_map)]
+        if valores_limpios.size == 0:
+            raise ValueError("El sensor no retornó datos válidos para este índice.")
+
         stats = calcular_estadisticas_pro(valores_limpios)
         
-        # Muestreo para que PHP pueda graficar si quiere
-        muestras = np.random.choice(valores_limpios, min(2000, len(valores_limpios)), replace=False).tolist()
+        # Muestreo representativo para la gráfica en PHP/JS
+        num_muestras = min(2000, len(valores_limpios))
+        muestras = np.random.choice(valores_limpios, num_muestras, replace=False).tolist()
 
-        # 5. Construcción del Prompt
-        prompt = generar_prompt_experto(index_name, stats, meta, aspctos_inv)
-
-        # 6.1. Invocación a Gemini 1.5 Flash y Configuración dinámica de la IA dentro del endpoint
+        # 5. CONFIGURACIÓN DINÁMICA DE IA
         if not gemini_key:
-            raise ValueError("No se recibió la API Key de Gemini desde el servidor.")
+            raise ValueError("API Key de Gemini no proporcionada por el servidor PHP.")
         
         genai.configure(api_key=gemini_key)
         model = genai.GenerativeModel('gemini-1.5-flash')
+
+        # 6. PROMPT Y DIAGNÓSTICO
+        prompt = generar_prompt_experto(index_name, stats, meta, aspctos_inv)
         response = model.generate_content(prompt)
         diagnostico_texto = response.text
 
-        # 6.2 Generación de PDF (Base64)
+        # 7. GENERACIÓN DE PDF (Base64)
         pdf_base64 = generar_pdf_diagnostico(diagnostico_texto, nmbre_fnca)
 
-        # 7. Retorno final estructurado
+        # 8. RETORNO ESTRUCTURADO FINAL
         return {
             "status": "success",
             "finca": nmbre_fnca,
@@ -361,13 +388,18 @@ async def analisis_index(
             "estadisticas": stats,
             "metadatos": meta,
             "muestreo_grafica": muestras,
-            "Diagnostico_ia": pdf_base64  # El PDF viaja aquí como string
+            "Diagnostico_ia": pdf_base64
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"❌ Error crítico en el análisis: {str(e)}", exc_info=True)
+        # Devolvemos un 200 con status error para que el JS capture el mensaje
+        return {"status": "error", "msg": str(e)}
+
     finally:
-        if os.path.exists(path): os.remove(path)
+        # Limpieza garantizada del archivo temporal
+        if 'temp_path' in locals() and os.path.exists(temp_path):
+            os.remove(temp_path)
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 10000))
