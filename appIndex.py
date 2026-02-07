@@ -22,7 +22,12 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s"
 )
 logger = logging.getLogger("analisis_index")
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+
+api_key = os.getenv("GEMINI_API_KEY")
+if not api_key:
+    logger.error("❌ CRÍTICO: GEMINI_API_KEY no encontrada en variables de entorno")
+else:
+    genai.configure(api_key=api_key)
 # =========================
 # 📥 Request schemas
 # =========================
@@ -116,24 +121,38 @@ def leer_raster_gdal(path, bandas_solicitadas):
         fecha = tags.get('TIFFTAG_DATETIME', tags.get('ACQUISITION_DATE', 'Fecha No Disponible'))
         
         bandas = {}
-        # Mapeo genérico: intentamos leer hasta 5 bandas si existen
-        # En sistemas reales, esto se ajusta según el sensor (Sentinel, Landsat, etc.)
-        nombres = ["B08", "B04", "B03", "B02", "B05"]
-        for i, nombre in enumerate(nombres, start=1):
-            if i <= src.count:
-                bandas[nombre] = src.read(i).astype('float32')
+        # Intentamos leer bandas de forma segura
+        try:
+            bandas["B08"] = src.read(1).astype('float32')
+            bandas["B04"] = src.read(2).astype('float32') if src.count >= 2 else bandas["B08"]
+            bandas["B03"] = src.read(3).astype('float32') if src.count >= 3 else bandas["B08"]
+            bandas["B02"] = src.read(4).astype('float32') if src.count >= 4 else bandas["B08"]
+        except Exception as e:
+            logger.warning(f"Error leyendo bandas individuales: {e}")
+            # Si falla, intentamos leer la primera como sea
+            bandas["B08"] = src.read(1).astype('float32')
+            bandas["B04"] = bandas["B08"]
+
+        # METADATOS SEGUROS (Validando si existen)
+        res = src.res[0] if (hasattr(src, 'res') and src.res) else 0
         
+        # Calculamos área solo si hay bounds válidos
+        try:
+            area = float((src.bounds.right - src.bounds.left) * (src.bounds.top - src.bounds.bottom))
+        except:
+            area = 0
+
         meta = {
             "sensor": sensor,
             "fecha": fecha,
-            "resolucion_m": float(src.res[0]) if src.res else 0,
-            "area_m2": float((src.bounds.right - src.bounds.left) * (src.bounds.top - src.bounds.bottom)),
-            "crs": str(src.crs),
+            "resolucion_m": float(res),
+            "area_m2": area,
+            "crs": str(src.crs) if src.crs else "No definido",
             "width": src.width,
             "height": src.height
         }
         return bandas, meta
-
+        
 def leer_raster_cientifico(path, bandas_solicitadas):
     ds = xr.open_dataset(path)
     bandas = {}
