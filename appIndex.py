@@ -302,7 +302,7 @@ async def analisis_index(
             with rasterio.open(path) as src:
                 logger.info(f"📖 Rasterio abrió el archivo. Bandas: {src.count}")
                 # Lectura de bandas (B8=NIR, B4=RED)
-                "B08": b1,
+                "B08": src.read(1).astype('float32'),
                 "B04": src.read(2).astype('float32') if src.count >= 2 else b1,
                 "B03": src.read(3).astype('float32') if src.count >= 3 else b1,
                 "B02": src.read(4).astype('float32') if src.count >= 4 else b1,
