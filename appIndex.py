@@ -6,6 +6,7 @@ import os
 import json
 import tempfile
 import numpy as np
+import rasterio
 import logging
 
 app = FastAPI()
@@ -32,22 +33,34 @@ class Request(BaseModel):
     aspctos_inv: str
     file: str   # path absoluto o relativo dentro del server
 
-def leer_raster_gdal(path, bandas):
-    """
-    Usa rasterio / GDAL
-    Retorna:
-      bandas: dict { "B08": np.array, ... }
-      meta: resolución, CRS, fecha, sensor, bbox
-    """
-    pass
-def leer_raster_gdal(path, bandas):
-    """
-    Usa rasterio / GDAL
-    Retorna:
-      bandas: dict { "B08": np.array, ... }
-      meta: resolución, CRS, fecha, sensor, bbox
-    """
-    pass
+def leer_raster_gdal(path, bandas_solicitadas):
+    with rasterio.open(path) as src:
+        # Intentamos extraer tags (muchos sensores guardan fecha y sensor aquí)
+        tags = src.tags()
+        
+        # Buscamos metadatos comunes en imágenes satelitales/drones
+        sensor = tags.get('TIFFTAG_SOFTWARE', tags.get('SENSOR_ID', 'Sensor No Identificado'))
+        fecha = tags.get('TIFFTAG_DATETIME', tags.get('ACQUISITION_DATE', 'Fecha No Disponible'))
+        
+        # Leemos las bandas. NOTA: Aquí asumimos que la banda 1 es NIR y la 2 es RED.
+        # En una implementación real, deberías mapear según el sensor detectado.
+        bandas = {
+            "B08": src.read(1).astype('float32'),
+            "B04": src.read(2).astype('float32')
+        }
+        
+        # Metadatos espaciales calculados dinámicamente
+        meta = {
+            "sensor": sensor,
+            "fecha": fecha,
+            "resolucion_m": float(src.res[0]), # Resolución en metros (si el CRS lo permite)
+            "area_m2": float((src.bounds.right - src.bounds.left) * (src.bounds.top - src.bounds.bottom)),
+            "crs": str(src.crs),
+            "width": src.width,
+            "height": src.height
+        }
+        
+        return bandas, meta
 
 
 def leer_raster_cientifico(path, bandas):
@@ -64,18 +77,21 @@ def leer_imagen_simple(path):
     """
     pass
 
-
 def muestrear_indice(arr, meta, resolucion_objetivo_m):
-    """
-    Retorna:
-    {
-        "resolucion_m": 0.5,
-        "valores": [...],
-        "coordenadas": [...],
-        "total_muestras": N
+    # Eliminamos valores fuera de rango o nulos (típicos en bordes de imágenes)
+    valores_validos = arr[~np.isnan(arr)]
+    
+    # Si la imagen es muy grande, tomamos una muestra representativa para no saturar la IA
+    if valores_validos.size > 10000:
+        muestras = np.random.choice(valores_validos, 5000, replace=False)
+    else:
+        muestras = valores_validos
+
+    return {
+        "resolucion_m": resolucion_objetivo_m,
+        "valores": muestras.tolist(), # Convertimos a lista para JSON
+        "total_muestras": len(muestras)
     }
-    """
-    pass
 
 def calcular_estadisticas(valores):
     return {
@@ -257,38 +273,45 @@ async def analisis_index(
     except json.JSONDecodeError:
         os.remove(file_path)
         raise HTTPException(status_code=400, detail="GeoJSON inválido")
+    try:
+        file_ext = detectar_tipo_archivo(file_path)
+    
+        # -------------------------
+        # CASE INDICES
+        # -------------------------
+    
+        if index_name == "ndvi":
+            resultado = analizar_ndvi(file_path, file_ext)
+    
+        elif index_name == "evi":
+            resultado = analizar_evi(file_path, file_ext)
+    
+        elif index_name == "ndwi":
+            resultado = analizar_ndwi(file_path, file_ext)
+    
+        elif index_name == "ndre":
+            resultado = analizar_ndre(file_path, file_ext)
+    
+        elif index_name == "msavi":
+            resultado = analizar_msavi(file_path, file_ext)
+    
+        elif index_name == "ndmi":
+            resultado = analizar_ndmi(file_path, file_ext)
+    
+        elif index_name == "reci":
+            resultado = analizar_reci(file_path, file_ext)
 
-    file_ext = detectar_tipo_archivo(file_path)
-
-    # -------------------------
-    # CASE INDICES
-    # -------------------------
-
-    if index_name == "ndvi":
-        resultado = analizar_ndvi(file_path, file_ext)
-
-    elif index_name == "evi":
-        resultado = analizar_evi(file_path, file_ext)
-
-    elif index_name == "ndwi":
-        resultado = analizar_ndwi(file_path, file_ext)
-
-    elif index_name == "ndre":
-        resultado = analizar_ndre(file_path, file_ext)
-
-    elif index_name == "msavi":
-        resultado = analizar_msavi(file_path, file_ext)
-
-    elif index_name == "ndmi":
-        resultado = analizar_ndmi(file_path, file_ext)
-
-    elif index_name == "reci":
-        resultado = analizar_reci(file_path, file_ext)
-
-    else:
-        raise HTTPException(status_code=400, detail="Índice no soportado")
-
-    return resultado
+        else:
+            raise HTTPException(status_code=400, detail="Índice no soportado")
+    
+        return resultado
+        
+    except Exception as e:
+        logger.error(f"❌ ERROR CRÍTICO: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error procesando imagen: {str(e)}")
+    finally:
+        if os.path.exists(file_path):
+            os.remove(file_path) # Limpieza de temporales
 
 # Make sure server start at the bottom of your file (if running directly)
 if __name__ == "__main__":
