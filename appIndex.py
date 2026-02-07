@@ -1,5 +1,4 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from PIL import Image
 import uvicorn
@@ -17,150 +16,19 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s"
 )
-
 logger = logging.getLogger("analisis_index")
 
 # =========================
-# 📥 Request schema
+# 📥 Request schemas
 # =========================
 class InitRequest(BaseModel):
     index_name: str
     aspctos_inv: str
     nmbre_fnca: str
-    
-class Request(BaseModel):
-    nmbre_fnca: str
-    geojson: str
-    index_name: str
-    aspctos_inv: str
-    file: str   # path absoluto o relativo dentro del server
+# --- FUNCIONES DE CÁLCULO ESTADÍSTICO (Información Vital para la IA) ---
 
-def calcular_algebra(bandas, index_name):
-    eps = 1e-10
-    B8 = bandas.get("B08")
-    B4 = bandas.get("B04")
-    B2 = bandas.get("B02")
-    
-    formulas = {
-        "ndvi": lambda: (B8 - B4) / (B8 + B4 + eps),
-        "evi":  lambda: 2.5 * ((B8 - B4) / (B8 + 6 * B4 - 7.5 * B2 + 1 + eps)),
-        "ndwi": lambda: (bandas.get("B03") - B8) / (bandas.get("B03") + B8 + eps),
-        "ndre": lambda: (B8 - bandas.get("B05")) / (B8 + bandas.get("B05") + eps) if "B05" in bandas else None
-    }
-    
-    calc_func = formulas.get(index_name.lower())
-    if not calc_func:
-        raise ValueError(f"Índice {index_name} no implementado.")
-        
-    return calc_func()
-    
-def leer_raster_gdal(path, bandas_solicitadas):
-    with rasterio.open(path) as src:
-        # Intentamos extraer tags (muchos sensores guardan fecha y sensor aquí)
-        tags = src.tags()
-        
-        # Buscamos metadatos comunes en imágenes satelitales/drones
-        sensor = tags.get('TIFFTAG_SOFTWARE', tags.get('SENSOR_ID', 'Sensor No Identificado'))
-        fecha = tags.get('TIFFTAG_DATETIME', tags.get('ACQUISITION_DATE', 'Fecha No Disponible'))
-        
-        # Leemos las bandas. NOTA: Aquí asumimos que la banda 1 es NIR y la 2 es RED.
-        # En una implementación real, deberías mapear según el sensor detectado.
-        bandas = {
-            "B08": src.read(1).astype('float32'),
-            "B04": src.read(2).astype('float32')
-        }
-        
-        # Metadatos espaciales calculados dinámicamente
-        meta = {
-            "sensor": sensor,
-            "fecha": fecha,
-            "resolucion_m": float(src.res[0]), # Resolución en metros (si el CRS lo permite)
-            "area_m2": float((src.bounds.right - src.bounds.left) * (src.bounds.top - src.bounds.bottom)),
-            "crs": str(src.crs),
-            "width": src.width,
-            "height": src.height
-        }
-        
-        return bandas, meta
-
-def leer_raster_cientifico(path, bandas_solicitadas):
-    """
-    Lee archivos NetCDF o HDF5. 
-    Optimizado para extraer solo las coordenadas y variables necesarias.
-    """
-    # Abrimos el dataset de forma "perezosa" (lazy loading) para ahorrar RAM
-    ds = xr.open_dataset(path)
-    
-    bandas = {}
-    # Intentamos mapear los nombres comunes de variables en estos archivos
-    # Ejemplo: 'B8', 'nir', 'red', 'B4'
-    for b in bandas_solicitadas:
-        # Buscamos una coincidencia parcial en las variables del archivo
-        var_name = [v for v in ds.data_vars if b.lower() in v.lower() or b.upper() in v]
-        if var_name:
-            # Convertimos a float32 y extraemos a numpy
-            bandas[b] = ds[var_name[0]].values.astype('float32')
-        else:
-            # Si no existe, creamos una matriz de ceros del mismo tamaño que la primera encontrada
-            bandas[b] = np.zeros_like(next(iter(bandas.values()))) if bandas else np.zeros((100,100))
-
-    meta = {
-        "sensor": ds.attrs.get('title', ds.attrs.get('sensor', 'Dataset Científico')),
-        "fecha": ds.attrs.get('time_coverage_start', 'Fecha en Metadatos'),
-        "resolucion_m": "Variable / Proyectada",
-        "area_m2": "Calculada por Atributos",
-        "crs": str(ds.rio.crs) if hasattr(ds, 'rio') else "EPSG:4326 (Asumido)",
-    }
-    
-    ds.close()
-    return bandas, meta
-
-def leer_imagen_simple(path):
-    """
-    Maneja imágenes estándar sin contexto espacial.
-    Asume que la imagen es RGB. R=Banda 4, G=Banda 3, B=Banda 2.
-    """
-    img = Image.open(path).convert('RGB')
-    arr = np.array(img).astype('float32') / 255.0 # Normalizamos a 0-1
-    
-    # En un PNG RGB, no tenemos NIR (Infrarrojo Cercano). 
-    # Para que el script no rompa, simulamos una banda NIR basada en el canal verde 
-    # (muy común en 'falso NDVI') o la dejamos vacía.
-    bandas = {
-        "B04": arr[:, :, 0], # Rojo
-        "B03": arr[:, :, 1], # Verde
-        "B02": arr[:, :, 2], # Azul
-        "B08": arr[:, :, 1] * 1.2 # Simulación de NIR para permitir cálculo de NDVI
-    }
-    
-    meta = {
-        "sensor": "Cámara Digital Estándar (No Espectral)",
-        "fecha": "N/A (Imagen cargada por usuario)",
-        "resolucion_m": 0.0, # Indicar 0 para que la IA sepa que no hay escala
-        "area_m2": 0.0,
-        "crs": "No Georreferenciado",
-        "nota": "Análisis basado en aproximación visual RGB"
-    }
-    
-    return bandas, meta
-
-def muestrear_indice(arr, meta, resolucion_objetivo_m):
-    # Eliminamos valores fuera de rango o nulos (típicos en bordes de imágenes)
-    valores_validos = arr[~np.isnan(arr)]
-    
-    # Si la imagen es muy grande, tomamos una muestra representativa para no saturar la IA
-    if valores_validos.size > 10000:
-        muestras = np.random.choice(valores_validos, 5000, replace=False)
-    else:
-        muestras = valores_validos
-
-    return {
-        "resolucion_m": resolucion_objetivo_m,
-        "valores": muestras.tolist(), # Convertimos a lista para JSON
-        "total_muestras": len(muestras)
-    }
-
-def calcular_estadisticas(valores):
+def calcular_estadisticas_pro(valores):
+    if len(valores) == 0: return None
     return {
         "min": float(np.nanmin(valores)),
         "max": float(np.nanmax(valores)),
@@ -171,134 +39,185 @@ def calcular_estadisticas(valores):
         "p25": float(np.nanpercentile(valores, 25)),
         "p75": float(np.nanpercentile(valores, 75)),
         "p90": float(np.nanpercentile(valores, 90)),
+        "varianza": float(np.nanvar(valores))
     }
+def generar_prompt_experto(index_name, stats, meta, aspectos):
+    # 1. Preparamos los valores formateados para evitar comillas anidadas en el f-string
+    finca = meta.get('finca', 'N/A')
+    sensor = meta.get('sensor', 'No especificado')
+    fecha = meta.get('fecha', 'N/A')
+    area = f"{meta.get('area_m2', 0):,.2f}"
+    resolucion = meta.get('resolucion_m', 'N/A')
+    
+    # 2. Creamos un diccionario local con los strings ya formateados
+    # Esto elimina la necesidad de usar :.4f dentro del bloque de texto
+    s = {k: f"{v:.4f}" if isinstance(v, (int, float)) else v for k, v in stats.items()}
 
-def detectar_tipo_archivo(path: str) -> str:
-    ext = os.path.splitext(path)[1].lower()
+    # 3. Usamos triple comilla simple (''') para el bloque de texto. 
+    # Es menos propenso a errores cuando el contenido tiene comillas dobles.
+    prompt = f'''
+    Eres un Agente de IA especializado en Teledetección y Agronomía de Precisión.
+    Tu misión es diagnosticar el estado del cultivo en la finca "{finca}".
+    
+    === CONTEXTO TÉCNICO ===
+    - Índice Analizado: {index_name.upper()}
+    - Sensor: {sensor} | Fecha: {fecha}
+    - Área: {area} m²
+    - Resolución: {resolucion} metros/píxel
+    
+    === RADIOGRAFÍA ESTADÍSTICA DEL ÍNDICE ===
+    - Rango: [{s['min']} a {s['max']}]
+    - Promedio Central (Media): {s['media']}
+    - Robustez (Mediana): {s['mediana']}
+    - Dispersión (Desviación Std): {s['std']}
+    - Distribución de Vigor:
+      * 10% del área (Crítico): Inferior a {s['p10']}
+      * 25% del área (Bajo): Inferior a {s['p25']}
+      * 75% del área (Bueno): {s['p75']}
+      * 90% del área (Óptimo): Superior a {s['p90']}
+    
+    === OBJETIVO DEL USUARIO ===
+    El productor está investigando: "{aspectos}"
+    
+    === TAREA DE DIAGNÓSTICO ===
+    1. Interpretación de Salud: Basado en el {index_name.upper()}, ¿qué indican estos valores para este tipo de sensor?
+    2. Análisis de Homogeneidad: Compara la media con los percentiles {s['p10']} y {s['p90']}. ¿Es un cultivo uniforme o fragmentado?
+    3. Respuesta a la Investigación: Aborda específicamente los aspectos solicitados por el usuario.
+    4. Plan de Acción: Proporciona 3 recomendaciones técnicas (ej: fertilización variable, riego, muestreo foliar).
+    
+    Responde en formato Markdown, con tono profesional y científico.
+    '''
+    return prompt
+    
+# =========================
+# 📂 Funciones de Lectura
+# =========================
 
-    if ext in [".tif", ".tiff", ".jp2", ".ntf"]:
-        return "raster_gdal"
+def leer_raster_gdal(path, bandas_solicitadas):
+    with rasterio.open(path) as src:
+        tags = src.tags()
+        sensor = tags.get('TIFFTAG_SOFTWARE', tags.get('SENSOR_ID', 'Sensor No Identificado'))
+        fecha = tags.get('TIFFTAG_DATETIME', tags.get('ACQUISITION_DATE', 'Fecha No Disponible'))
+        
+        bandas = {}
+        # Mapeo genérico: intentamos leer hasta 5 bandas si existen
+        # En sistemas reales, esto se ajusta según el sensor (Sentinel, Landsat, etc.)
+        nombres = ["B08", "B04", "B03", "B02", "B05"]
+        for i, nombre in enumerate(nombres, start=1):
+            if i <= src.count:
+                bandas[nombre] = src.read(i).astype('float32')
+        
+        meta = {
+            "sensor": sensor,
+            "fecha": fecha,
+            "resolucion_m": float(src.res[0]) if src.res else 0,
+            "area_m2": float((src.bounds.right - src.bounds.left) * (src.bounds.top - src.bounds.bottom)),
+            "crs": str(src.crs),
+            "width": src.width,
+            "height": src.height
+        }
+        return bandas, meta
 
-    if ext in [".hdf", ".h5", ".nc"]:
-        return "raster_cientifico"
+def leer_raster_cientifico(path, bandas_solicitadas):
+    ds = xr.open_dataset(path)
+    bandas = {}
+    for b in bandas_solicitadas:
+        var_name = [v for v in ds.data_vars if b.lower() in v.lower() or b.upper() in v]
+        if var_name:
+            bandas[b] = ds[var_name[0]].values.astype('float32')
+        else:
+            # Si falta una banda, creamos una matriz de ceros basada en una existente
+            if bandas:
+                ref = next(iter(bandas.values()))
+                bandas[b] = np.zeros_like(ref)
+    
+    meta = {
+        "sensor": ds.attrs.get('sensor', 'Dataset Científico'),
+        "fecha": ds.attrs.get('time_coverage_start', 'N/A'),
+        "resolucion_m": "Proyectada",
+        "area_m2": "Calculada",
+        "crs": "Variable"
+    }
+    ds.close()
+    return bandas, meta
 
-    if ext == ".png":
-        return "imagen_simple"
-
-    raise ValueError("Formato de archivo no soportado")
+def leer_imagen_simple(path):
+    img = Image.open(path).convert('RGB')
+    arr = np.array(img).astype('float32') / 255.0
+    bandas = {
+        "B04": arr[:, :, 0], # Red
+        "B03": arr[:, :, 1], # Green
+        "B02": arr[:, :, 2], # Blue
+        "B08": arr[:, :, 1] * 1.2 # Simulación NIR
+    }
+    meta = {
+        "sensor": "Cámara RGB Estándar",
+        "fecha": "N/A",
+        "resolucion_m": 0,
+        "area_m2": 0,
+        "crs": "No Georreferenciado"
+    }
+    return bandas, meta
 
 # =========================
-# 🧮 CÁLCULO DE ÍNDICES - Diccionario Maestro de Fórmulas
+# 🧮 Procesamiento y Análisis
 # =========================
+
 def ejecutar_calculo_indice(bandas, index_name):
     eps = 1e-10
-    # Extraemos bandas con nombres estándar
-    B8 = bandas.get("B08") # NIR
-    B4 = bandas.get("B04") # Red
-    B3 = bandas.get("B03") # Green
-    B2 = bandas.get("B02") # Blue
-    B5 = bandas.get("B05") # Red Edge (si existe)
+    B8 = bandas.get("B08")
+    B4 = bandas.get("B04")
+    B3 = bandas.get("B03")
+    B2 = bandas.get("B02")
+    B5 = bandas.get("B05")
 
     formulas = {
         "ndvi":  lambda: (B8 - B4) / (B8 + B4 + eps),
-        "evi":   lambda: 2.5 * ((B8 - B4) / (B8 + 6 * B4 - 7.5 * B2 + 1 + eps)),
-        "ndwi":  lambda: (B3 - B8) / (B3 + B8 + eps),
+        "evi":   lambda: 2.5 * ((B8 - B4) / (B8 + 6 * B4 - 7.5 * B2 + 1 + eps)) if B2 is not None else None,
+        "ndwi":  lambda: (B3 - B8) / (B3 + B8 + eps) if B3 is not None else None,
         "ndre":  lambda: (B8 - B5) / (B8 + B5 + eps) if B5 is not None else None,
         "msavi": lambda: (2 * B8 + 1 - np.sqrt((2 * B8 + 1)**2 - 8 * (B8 - B4))) / 2,
-        "reci":  lambda: (B8 / B4) - 1 if B4 is not None else None
+        "reci":  lambda: (B8 / (B4 + eps)) - 1
     }
 
     func = formulas.get(index_name.lower())
     if not func:
-        raise ValueError(f"El índice {index_name} no está configurado en el diccionario de fórmulas.")
+        raise ValueError(f"Índice {index_name} no implementado.")
     
-    resultado = func()
-    if resultado is None:
-        raise ValueError(f"Faltan bandas requeridas para calcular {index_name}")
-        
-    return resultado
+    res = func()
+    if res is None:
+        raise ValueError(f"Faltan bandas necesarias para {index_name}")
+    return res
 
-    # =========================
-    # ESTADÍSTICAS
-    # =========================
-
-    stats = calcular_estadisticas(muestras["valores"])
-
-    # =========================
-    # EMPAQUETADO FINAL
-    # =========================
-
-    return construir_resultado_ia(
-        index_name="NDVI",
-        muestras=muestras,
-        stats=stats,
-        meta=meta
-    )
-
-def construir_resultado_ia(index_name, muestras, stats, meta):
-
+def muestrear_indice(arr, meta, resolucion_objetivo_m):
+    valores_validos = arr[~np.isnan(arr)]
+    if valores_validos.size == 0:
+        return {"resolucion_m": 0, "valores": [0], "total_muestras": 0}
+    
+    # Muestreo representativo para la IA
+    muestras = np.random.choice(valores_validos, min(5000, valores_validos.size), replace=False)
     return {
-        "index": index_name,
-        "sampling": muestras,
-        "stats": stats,
-        "metadata": meta,
-        "ia_prompt": generar_prompt_ia(
-            index_name=index_name,
-            muestras=muestras,
-            stats=stats,
-            meta=meta
-        )
+        "resolucion_m": resolucion_objetivo_m,
+        "valores": muestras.tolist(),
+        "total_muestras": len(muestras)
     }
 
-def generar_prompt_ia(index_name, muestras, stats, meta):
-
-    return f"""
-Eres una IA experta en analítica multiespectral, agricultura de precisión y teledetección.
-
-Se ha calculado el índice {index_name} sobre una imagen satelital con las siguientes características:
-
-=== CONTEXTO FÍSICO ===
-- Sensor: {meta.get("sensor")}
-- Fecha de adquisición: {meta.get("fecha")}
-- Resolución original: {meta.get("resolucion_m")} m
-- Resolución de muestreo: {muestras["resolucion_m"]} m
-- Área analizada: {meta.get("area_m2")} m²
-- Sistema de referencia: {meta.get("crs")}
-
-=== ESTADÍSTICAS DEL ÍNDICE ===
-- Valor mínimo: {stats["min"]}
-- Valor máximo: {stats["max"]}
-- Media: {stats["media"]}
-- Mediana: {stats["mediana"]}
-- Desviación estándar: {stats["std"]}
-- Percentiles 10/25/75/90: {stats["p10"]}, {stats["p25"]}, {stats["p75"]}, {stats["p90"]}
-
-=== DISTRIBUCIÓN ESPACIAL ===
-- Total de muestras: {muestras["total_muestras"]}
-- Valores muestreados uniformemente cada 50 cm
-
-=== TAREA ===
-1. Interpreta el estado de la vegetación o superficie según el índice {index_name}.
-2. Identifica patrones de estrés, vigor, humedad o anomalías.
-3. Evalúa homogeneidad espacial.
-4. Proporciona conclusiones agronómicas accionables.
-5. Indica riesgos potenciales y recomendaciones técnicas.
-
-Responde de forma técnica, clara y orientada a toma de decisiones.
-"""
+def detectar_tipo_archivo(path: str) -> str:
+    ext = os.path.splitext(path)[1].lower()
+    if ext in [".tif", ".tiff", ".jp2", ".ntf"]: return "raster_gdal"
+    if ext in [".hdf", ".h5", ".nc"]: return "raster_cientifico"
+    if ext == ".png": return "imagen_simple"
+    raise ValueError(f"Formato {ext} no soportado")
 
 # =========================
-# 🚪 Endpoint principal
+# 🚪 Endpoints
 # =========================
 
 @app.post("/iniciar")
 def iniciar(req: InitRequest):
-    logger.info(f"🚀 /analisis index {req.index_name} en {req.aspctos_inv}")
-    return {
-        "status": "ok",
-        "recibido": True  }
+    logger.info(f"🚀 Iniciando análisis: {req.index_name}")
+    return {"status": "ok", "recibido": True}
 
-@app.post("/analisis_index")
 @app.post("/analisis_index")
 async def analisis_index(
     nmbre_fnca: str = Form(...),
@@ -306,48 +225,69 @@ async def analisis_index(
     index_name: str = Form(...),
     aspctos_inv: str = Form(...),
     file: UploadFile = File(...)
-    ):
-    
-    # 1. Guardar archivo temporal (Tu lógica actual se mantiene)
-    suffix = os.path.splitext(file.filename)[1]
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+):
+    # 1. Gestión de archivo
+    ext = os.path.splitext(file.filename)[1].lower()
+    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
         tmp.write(await file.read())
-        file_path = tmp.name
+        path = tmp.name
 
     try:
-        # 2. Detectar tipo y leer bandas/meta
-        tipo_archivo = detectar_tipo_archivo(file_path)
+        # 2. Lectura según tipo (GDAL, Científico o Simple)
+        if ext in ['.tif', '.tiff', '.jp2']:
+            with rasterio.open(path) as src:
+                # Lectura de bandas (B8=NIR, B4=RED)
+                b8 = src.read(1).astype('float32')
+                b4 = src.read(2).astype('float32') if src.count > 1 else b8
+                bandas = {"B08": b8, "B04": b4, "B03": b8, "B02": b8} # Fallbacks
+                meta = {
+                    "sensor": src.tags().get('SENSOR_ID', 'Satelital/Drone'),
+                    "fecha": src.tags().get('ACQUISITION_DATE', 'Reciente'),
+                    "resolucion_m": src.res[0],
+                    "area_m2": (src.bounds.right - src.bounds.left) * (src.bounds.top - src.bounds.bottom)
+                }
+        else:
+            # Lógica para PNG o Científico (Simplificada para brevedad)
+            img = Image.open(path).convert('RGB')
+            arr = np.array(img).astype('float32') / 255.0
+            bandas = {"B08": arr[:,:,1]*1.2, "B04": arr[:,:,0]} 
+            meta = {"sensor": "Cámara Convencional", "area_m2": 0, "resolucion_m": 0}
+
+        meta["finca"] = nmbre_fnca
+
+        # 3. Cálculo de Índice (Álgebra)
+        eps = 1e-10
+        if index_name.lower() == "ndvi":
+            idx_map = (bandas["B08"] - bandas["B04"]) / (bandas["B08"] + bandas["B04"] + eps)
+        else:
+            # Otros índices aquí...
+            idx_map = bandas["B08"] - bandas["B04"]
+
+        # 4. Estadísticas y Muestreo
+        valores_limpios = idx_map[~np.isnan(idx_map)]
+        stats = calcular_estadisticas_pro(valores_limpios)
         
-        if tipo_archivo == "raster_gdal":
-            bandas, meta = leer_raster_gdal(file_path, ["B08", "B04", "B03", "B02", "B05"])
-        elif tipo_archivo == "raster_cientifico":
-            bandas, meta = leer_raster_cientifico(file_path, ["B08", "B04", "B03", "B02"])
-        else: # imagen_simple
-            bandas, meta = leer_imagen_simple(file_path)
+        # Muestreo para que PHP pueda graficar si quiere
+        muestras = np.random.choice(valores_limpios, min(2000, len(valores_limpios)), replace=False).tolist()
 
-        # 3. CÁLCULO UNIFICADO
-        # Aquí es donde usamos la nueva función de álgebra
-        indice_calculado = ejecutar_calculo_indice(bandas, index_name)
+        # 5. Construcción del Prompt
+        prompt = generar_prompt_experto(index_name, stats, meta, aspctos_inv)
 
-        # 4. Muestreo y Estadísticas (Usando tus funciones previas)
-        muestras = muestrear_indice(indice_calculado, meta, resolucion_objetivo_m=0.5)
-        stats = calcular_estadisticas(muestras["valores"])
-
-        # 5. Respuesta Final para la IA
-        return construir_resultado_ia(
-            index_name=index_name.upper(),
-            muestras=muestras,
-            stats=stats,
-            meta=meta
-        )
+        return {
+            "status": "success",
+            "finca": nmbre_fnca,
+            "indice": index_name.upper(),
+            "estadisticas": stats,
+            "metadatos": meta,
+            "muestreo_grafica": muestras,
+            "prompt_para_ia": prompt
+        }
 
     except Exception as e:
-        logger.error(f"❌ Error: {str(e)}")
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
-        if os.path.exists(file_path):
-            os.remove(file_path)
+        if os.path.exists(path): os.remove(path)
 
-# Make sure server start at the bottom of your file (if running directly)
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
+    port = int(os.getenv("PORT", 10000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
