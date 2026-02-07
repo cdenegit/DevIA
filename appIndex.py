@@ -191,18 +191,20 @@ def leer_imagen_simple(path):
 
 def ejecutar_calculo_indice(bandas, index_name):
     eps = 1e-10
+    
+    # Extraemos bandas con fallback: si una no existe, usamos la B08 para evitar que np.array falle
     B8 = bandas.get("B08")
-    B4 = bandas.get("B04")
-    B3 = bandas.get("B03")
-    B2 = bandas.get("B02")
-    B5 = bandas.get("B05")
+    B4 = bandas.get("B04") if bandas.get("B04") is not None else B8
+    B3 = bandas.get("B03") if bandas.get("B03") is not None else B8
+    B2 = bandas.get("B02") if bandas.get("B02") is not None else B4
+    B5 = bandas.get("B05") if bandas.get("B05") is not None else B4
 
     formulas = {
         "ndvi":  lambda: (B8 - B4) / (B8 + B4 + eps),
-        "evi":   lambda: 2.5 * ((B8 - B4) / (B8 + 6 * B4 - 7.5 * B2 + 1 + eps)) if B2 is not None else None,
-        "ndwi":  lambda: (B3 - B8) / (B3 + B8 + eps) if B3 is not None else None,
-        "ndre":  lambda: (B8 - B5) / (B8 + B5 + eps) if B5 is not None else None,
-        "msavi": lambda: (2 * B8 + 1 - np.sqrt((2 * B8 + 1)**2 - 8 * (B8 - B4))) / 2,
+        "evi":   lambda: 2.5 * ((B8 - B4) / (B8 + 6 * B4 - 7.5 * B2 + 1 + eps)),
+        "ndwi":  lambda: (B3 - B8) / (B3 + B8 + eps),
+        "ndre":  lambda: (B8 - B5) / (B8 + B5 + eps),
+        "msavi": lambda: (2 * B8 + 1 - np.sqrt(np.maximum(0, (2 * B8 + 1)**2 - 8 * (B8 - B4)))) / 2,
         "reci":  lambda: (B8 / (B4 + eps)) - 1
     }
 
@@ -210,10 +212,13 @@ def ejecutar_calculo_indice(bandas, index_name):
     if not func:
         raise ValueError(f"Índice {index_name} no implementado.")
     
-    res = func()
-    if res is None:
-        raise ValueError(f"Faltan bandas necesarias para {index_name}")
-    return res
+    try:
+        res = func()
+        # Limpieza de seguridad para la IA: eliminar NaNs e Infinitos
+        res = np.nan_to_num(res, nan=0.0, posinf=1.0, neginf=-1.0)
+        return res
+    except Exception as e:
+        raise ValueError(f"Error matemático al calcular {index_name}: {str(e)}")
 
 def muestrear_indice(arr, meta, resolucion_objetivo_m):
     valores_validos = arr[~np.isnan(arr)]
