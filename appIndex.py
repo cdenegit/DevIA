@@ -20,7 +20,11 @@ logger = logging.getLogger("analisis_index")
 # =========================
 # 📥 Request schema
 # =========================
-
+class InitRequest(BaseModel):
+    index_name: str
+    aspctos_inv: str
+    nmbre_fnca: str
+    
 class Request(BaseModel):
     nmbre_fnca: str
     geojson: str
@@ -209,9 +213,11 @@ Responde de forma técnica, clara y orientada a toma de decisiones.
 # =========================
 
 @app.post("/iniciar")
-def iniciar(req: Request):
-    logger.info("🚀 /analisis index {req.index_name}")
-    return True
+def iniciar(req: InitRequest):
+    logger.info(f"🚀 /analisis index {req.index_name} en {req.aspctos_inv}")
+    return {
+        "status": "ok",
+        "recibido": True  }
 
 @app.post("/analisis_index")
 async def analisis_index(
