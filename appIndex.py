@@ -103,45 +103,47 @@ def generar_prompt_experto(index_name, stats, meta, aspectos):
 # 📂 Funciones de Lectura
 # =========================
 
-def leer_raster_gdal(path, bandas_solicitadas):
+def leer_raster_gdal(path):
+    """Lee el raster intentando extraer bandas 1 y 2 (NIR/RED) con seguridad."""
     with rasterio.open(path) as src:
+        # Extraer metadatos con seguridad (usando .get o validando existencia)
         tags = src.tags()
         sensor = tags.get('TIFFTAG_SOFTWARE', tags.get('SENSOR_ID', 'Sensor No Identificado'))
         fecha = tags.get('TIFFTAG_DATETIME', tags.get('ACQUISITION_DATE', 'Fecha No Disponible'))
         
-        bandas = {}
-        # Intentamos leer bandas de forma segura
+        # Leemos bandas. Si no tiene 2 bandas, duplicamos la 1 para que no de error el cálculo
         try:
-            bandas["B08"] = src.read(1).astype('float32')
-            bandas["B04"] = src.read(2).astype('float32') if src.count >= 2 else bandas["B08"]
-            bandas["B03"] = src.read(3).astype('float32') if src.count >= 3 else bandas["B08"]
-            bandas["B02"] = src.read(4).astype('float32') if src.count >= 4 else bandas["B08"]
+            b1 = src.read(1).astype('float32')
+            b2 = src.read(2).astype('float32') if src.count >= 2 else b1
         except Exception as e:
-            logger.warning(f"Error leyendo bandas individuales: {e}")
-            # Si falla, intentamos leer la primera como sea
-            bandas["B08"] = src.read(1).astype('float32')
-            bandas["B04"] = bandas["B08"]
+            logger.warning(f"Error leyendo bandas, usando fallback: {e}")
+            b1 = src.read(1).astype('float32')
+            b2 = b1
 
-        # METADATOS SEGUROS (Validando si existen)
-        res = src.res[0] if (hasattr(src, 'res') and src.res) else 0
-        
-        # Calculamos área solo si hay bounds válidos
+        # Manejo seguro de geotransformación (Evita el Error 500 si no hay CRS)
+        res = 0.0
+        area = 0.0
         try:
-            area = float((src.bounds.right - src.bounds.left) * (src.bounds.top - src.bounds.bottom))
+            if src.res and len(src.res) > 0:
+                res = float(src.res[0])
+            if src.bounds:
+                area = float((src.bounds.right - src.bounds.left) * (src.bounds.top - src.bounds.bottom))
         except:
-            area = 0
+            pass # Si falla, se quedan en 0.0
 
         meta = {
             "sensor": sensor,
             "fecha": fecha,
-            "resolucion_m": float(res),
-            "area_m2": area,
-            "crs": str(src.crs) if src.crs else "No definido",
+            "resolucion_m": res,
+            "area_m2": abs(area),
+            "crs": str(src.crs) if src.crs else "No Georreferenciado",
             "width": src.width,
             "height": src.height
         }
-        return bandas, meta
         
+        bandas = {"B08": b1, "B04": b2, "B03": b1, "B02": b1} # Mapeo básico
+        return bandas, meta
+ 
 def leer_raster_cientifico(path, bandas_solicitadas):
     ds = xr.open_dataset(path)
     bandas = {}
