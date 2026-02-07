@@ -30,7 +30,7 @@ class Request(BaseModel):
     geojson: str
     index_name: str
     aspctos_inv: str
-    file_path: str   # path absoluto o relativo dentro del server
+    file: str   # path absoluto o relativo dentro del server
 
 def leer_raster_gdal(path, bandas):
     """
