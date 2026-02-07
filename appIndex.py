@@ -299,6 +299,7 @@ async def analisis_index(
     index_name: str = Form(...),
     aspctos_inv: str = Form(...),
     gemini_key: str = Form(...),
+    modelo_ia: str = Form(...),
     file: UploadFile = File(...)
 ):
 # 1. Gestión de archivo con escritura física previa
@@ -371,8 +372,8 @@ async def analisis_index(
             raise ValueError("API Key de Gemini no proporcionada por el servidor PHP.")
         
         genai.configure(api_key=gemini_key)
-        # model = genai.GenerativeModel('models/gemini-1.5-flash')
-        model = genai.GenerativeModel(model_name="gemini-1.5-flash")
+        # model = genai.GenerativeModel, se Usa la variable modelo_ia enviada desde PHP
+        model = genai.GenerativeModel(model_name=modelo_ia) 
 
         # 6. PROMPT Y DIAGNÓSTICO
         prompt = generar_prompt_experto(index_name, stats, meta, aspctos_inv)
