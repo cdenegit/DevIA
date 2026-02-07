@@ -371,7 +371,8 @@ async def analisis_index(
             raise ValueError("API Key de Gemini no proporcionada por el servidor PHP.")
         
         genai.configure(api_key=gemini_key)
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        # model = genai.GenerativeModel('models/gemini-1.5-flash')
+        model = genai.GenerativeModel(model_name="gemini-1.5-flash")
 
         # 6. PROMPT Y DIAGNÓSTICO
         prompt = generar_prompt_experto(index_name, stats, meta, aspctos_inv)
