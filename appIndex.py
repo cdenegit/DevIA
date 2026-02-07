@@ -187,40 +187,36 @@ def detectar_tipo_archivo(path: str) -> str:
 
     raise ValueError("Formato de archivo no soportado")
 
-def analizar_ndvi(file_path, file_type):
-
-    # =========================
-    # CASE TIPO DE ARCHIVO
-    # =========================
-
-    if file_type == "raster_gdal":
-        bandas, meta = leer_raster_gdal(file_path, bandas=["B08", "B04"])
-
-    elif file_type == "raster_cientifico":
-        bandas, meta = leer_raster_cientifico(file_path, bandas=["B08", "B04"])
-
-    elif file_type == "imagen_simple":
-        bandas, meta = leer_imagen_simple(file_path)
-
-    else:
-        raise ValueError("Tipo de archivo no válido")
-
-    # =========================
-    # CÁLCULO DEL ÍNDICE
-    # =========================
-
+# =========================
+# 🧮 CÁLCULO DE ÍNDICES - Diccionario Maestro de Fórmulas
+# =========================
+def ejecutar_calculo_indice(bandas, index_name):
     eps = 1e-10
-    ndvi = (bandas["B08"] - bandas["B04"]) / (bandas["B08"] + bandas["B04"] + eps)
+    # Extraemos bandas con nombres estándar
+    B8 = bandas.get("B08") # NIR
+    B4 = bandas.get("B04") # Red
+    B3 = bandas.get("B03") # Green
+    B2 = bandas.get("B02") # Blue
+    B5 = bandas.get("B05") # Red Edge (si existe)
 
-    # =========================
-    # MUESTREO ESPACIAL (50 cm)
-    # =========================
+    formulas = {
+        "ndvi":  lambda: (B8 - B4) / (B8 + B4 + eps),
+        "evi":   lambda: 2.5 * ((B8 - B4) / (B8 + 6 * B4 - 7.5 * B2 + 1 + eps)),
+        "ndwi":  lambda: (B3 - B8) / (B3 + B8 + eps),
+        "ndre":  lambda: (B8 - B5) / (B8 + B5 + eps) if B5 is not None else None,
+        "msavi": lambda: (2 * B8 + 1 - np.sqrt((2 * B8 + 1)**2 - 8 * (B8 - B4))) / 2,
+        "reci":  lambda: (B8 / B4) - 1 if B4 is not None else None
+    }
 
-    muestras = muestrear_indice(
-        ndvi,
-        meta,
-        resolucion_objetivo_m=0.5
-    )
+    func = formulas.get(index_name.lower())
+    if not func:
+        raise ValueError(f"El índice {index_name} no está configurado en el diccionario de fórmulas.")
+    
+    resultado = func()
+    if resultado is None:
+        raise ValueError(f"Faltan bandas requeridas para calcular {index_name}")
+        
+    return resultado
 
     # =========================
     # ESTADÍSTICAS
@@ -303,6 +299,7 @@ def iniciar(req: InitRequest):
         "recibido": True  }
 
 @app.post("/analisis_index")
+@app.post("/analisis_index")
 async def analisis_index(
     nmbre_fnca: str = Form(...),
     geojson: str = Form(...),
@@ -310,75 +307,46 @@ async def analisis_index(
     aspctos_inv: str = Form(...),
     file: UploadFile = File(...)
     ):
-    logger.info("🚀 /analisis_index INVOCADO")
-    # -------------------------
-    # Normalización básica
-    # -------------------------
-
-    index_name = index_name.lower()
-    logger.info(f"📌 Finca: {nmbre_fnca}")
-    logger.info(f"📌 Index: {index_name}")
-    logger.info(f"📌 Archivo: {file.filename if file else 'NO FILE'}")
-    logger.info(f"📌 GeoJSON length: {len(geojson)}")
-    # -------------------------
-    # Guardar archivo temporal
-    # -------------------------
-    logger.info("💾 Guardando archivo temporal")
+    
+    # 1. Guardar archivo temporal (Tu lógica actual se mantiene)
     suffix = os.path.splitext(file.filename)[1]
-
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp.write(await file.read())
         file_path = tmp.name
-        
-    logger.info(f"✅ Archivo guardado en {file_path}")
-    # -------------------------
-    # Validaciones
-    # -------------------------
 
     try:
-        geo = json.loads(geojson)
-    except json.JSONDecodeError:
-        os.remove(file_path)
-        raise HTTPException(status_code=400, detail="GeoJSON inválido")
-    try:
-        file_ext = detectar_tipo_archivo(file_path)
-    
-        # -------------------------
-        # CASE INDICES
-        # -------------------------
-    
-        if index_name == "ndvi":
-            resultado = analizar_ndvi(file_path, file_ext)
-    
-        elif index_name == "evi":
-            resultado = analizar_evi(file_path, file_ext)
-    
-        elif index_name == "ndwi":
-            resultado = analizar_ndwi(file_path, file_ext)
-    
-        elif index_name == "ndre":
-            resultado = analizar_ndre(file_path, file_ext)
-    
-        elif index_name == "msavi":
-            resultado = analizar_msavi(file_path, file_ext)
-    
-        elif index_name == "ndmi":
-            resultado = analizar_ndmi(file_path, file_ext)
-    
-        elif index_name == "reci":
-            resultado = analizar_reci(file_path, file_ext)
-
-        else:
-            raise HTTPException(status_code=400, detail="Índice no soportado")
-    
-        return resultado
+        # 2. Detectar tipo y leer bandas/meta
+        tipo_archivo = detectar_tipo_archivo(file_path)
         
+        if tipo_archivo == "raster_gdal":
+            bandas, meta = leer_raster_gdal(file_path, ["B08", "B04", "B03", "B02", "B05"])
+        elif tipo_archivo == "raster_cientifico":
+            bandas, meta = leer_raster_cientifico(file_path, ["B08", "B04", "B03", "B02"])
+        else: # imagen_simple
+            bandas, meta = leer_imagen_simple(file_path)
+
+        # 3. CÁLCULO UNIFICADO
+        # Aquí es donde usamos la nueva función de álgebra
+        indice_calculado = ejecutar_calculo_indice(bandas, index_name)
+
+        # 4. Muestreo y Estadísticas (Usando tus funciones previas)
+        muestras = muestrear_indice(indice_calculado, meta, resolucion_objetivo_m=0.5)
+        stats = calcular_estadisticas(muestras["valores"])
+
+        # 5. Respuesta Final para la IA
+        return construir_resultado_ia(
+            index_name=index_name.upper(),
+            muestras=muestras,
+            stats=stats,
+            meta=meta
+        )
+
     except Exception as e:
-        logger.error(f"❌ ERROR CRÍTICO: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error procesando imagen: {str(e)}")
+        logger.error(f"❌ Error: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
     finally:
         if os.path.exists(file_path):
-            os.remove(file_path) # Limpieza de temporales
+            os.remove(file_path)
 
 # Make sure server start at the bottom of your file (if running directly)
 if __name__ == "__main__":
