@@ -30,7 +30,18 @@ class InitRequest(BaseModel):
     index_name: str
     aspctos_inv: str
     nmbre_fnca: str
+
+class Request(BaseModel):
+    nmbre_fnca: str
+    geojson: str
+    index_name: str
+    aspctos_inv: str
+    file: str  
 # --- FUNCIONES DE CÁLCULO ESTADÍSTICO (Información Vital para la IA) ---
+
+@app.get("/")
+def read_root():
+    return {"status": "online", "service": "AgroTech Analyzer"}
 
 def calcular_estadisticas_pro(valores):
     if len(valores) == 0: return None
