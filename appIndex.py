@@ -1,6 +1,11 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel
 from PIL import Image
+import google.generativeai as genai
+import base64
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
 import uvicorn
 import os
 import json
@@ -17,7 +22,7 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s"
 )
 logger = logging.getLogger("analisis_index")
-
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 # =========================
 # 📥 Request schemas
 # =========================
@@ -209,6 +214,33 @@ def detectar_tipo_archivo(path: str) -> str:
     if ext == ".png": return "imagen_simple"
     raise ValueError(f"Formato {ext} no soportado")
 
+def generar_pdf_diagnostico(texto_markdown, nombre_finca):
+    """Convierte el diagnóstico de la IA en un PDF binario."""
+    path_pdf = tempfile.mktemp(suffix=".pdf")
+    doc = SimpleDocTemplate(path_pdf, pagesize=letter)
+    styles = getSampleStyleSheet()
+    story = []
+
+    # Título del Reporte
+    story.append(Paragraph(f"Informe de Diagnóstico: {nombre_finca}", styles['Title']))
+    story.append(Spacer(1, 12))
+
+    # Limpiamos un poco el Markdown simple para el PDF
+    lineas = texto_markdown.replace("###", "").replace("##", "").replace("**", "").split("\n")
+    for linea in lineas:
+        if linea.strip():
+            story.append(Paragraph(linea, styles['Normal']))
+            story.append(Spacer(1, 6))
+
+    doc.build(story)
+    
+    # Leer el PDF y convertirlo a Base64
+    with open(path_pdf, "rb") as f:
+        pdf_encoded = base64.b64encode(f.read()).decode('utf-8')
+    
+    os.remove(path_pdf) # Limpieza
+    return pdf_encoded
+    
 # =========================
 # 🚪 Endpoints
 # =========================
@@ -273,6 +305,15 @@ async def analisis_index(
         # 5. Construcción del Prompt
         prompt = generar_prompt_experto(index_name, stats, meta, aspctos_inv)
 
+        # 6.1. Invocación a Gemini 1.5 Flash
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        response = model.generate_content(prompt)
+        diagnostico_texto = response.text
+
+        # 6.2 Generación de PDF (Base64)
+        pdf_base64 = generar_pdf_diagnostico(diagnostico_texto, nmbre_fnca)
+
+        # 7. Retorno final estructurado
         return {
             "status": "success",
             "finca": nmbre_fnca,
@@ -280,7 +321,7 @@ async def analisis_index(
             "estadisticas": stats,
             "metadatos": meta,
             "muestreo_grafica": muestras,
-            "prompt_para_ia": prompt
+            "Diagnostico_ia": pdf_base64  # El PDF viaja aquí como string
         }
 
     except Exception as e:
