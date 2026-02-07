@@ -35,6 +35,25 @@ class Request(BaseModel):
     aspctos_inv: str
     file: str   # path absoluto o relativo dentro del server
 
+def calcular_algebra(bandas, index_name):
+    eps = 1e-10
+    B8 = bandas.get("B08")
+    B4 = bandas.get("B04")
+    B2 = bandas.get("B02")
+    
+    formulas = {
+        "ndvi": lambda: (B8 - B4) / (B8 + B4 + eps),
+        "evi":  lambda: 2.5 * ((B8 - B4) / (B8 + 6 * B4 - 7.5 * B2 + 1 + eps)),
+        "ndwi": lambda: (bandas.get("B03") - B8) / (bandas.get("B03") + B8 + eps),
+        "ndre": lambda: (B8 - bandas.get("B05")) / (B8 + bandas.get("B05") + eps) if "B05" in bandas else None
+    }
+    
+    calc_func = formulas.get(index_name.lower())
+    if not calc_func:
+        raise ValueError(f"Índice {index_name} no implementado.")
+        
+    return calc_func()
+    
 def leer_raster_gdal(path, bandas_solicitadas):
     with rasterio.open(path) as src:
         # Intentamos extraer tags (muchos sensores guardan fecha y sensor aquí)
