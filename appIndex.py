@@ -1,12 +1,14 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
+from PIL import Image
 import uvicorn
 import os
 import json
 import tempfile
 import numpy as np
 import rasterio
+import xarray as xr
 import logging
 
 app = FastAPI()
@@ -62,20 +64,66 @@ def leer_raster_gdal(path, bandas_solicitadas):
         
         return bandas, meta
 
-
-def leer_raster_cientifico(path, bandas):
+def leer_raster_cientifico(path, bandas_solicitadas):
     """
-    Usa h5py / netCDF4 / xarray
+    Lee archivos NetCDF o HDF5. 
+    Optimizado para extraer solo las coordenadas y variables necesarias.
     """
-    pass
+    # Abrimos el dataset de forma "perezosa" (lazy loading) para ahorrar RAM
+    ds = xr.open_dataset(path)
+    
+    bandas = {}
+    # Intentamos mapear los nombres comunes de variables en estos archivos
+    # Ejemplo: 'B8', 'nir', 'red', 'B4'
+    for b in bandas_solicitadas:
+        # Buscamos una coincidencia parcial en las variables del archivo
+        var_name = [v for v in ds.data_vars if b.lower() in v.lower() or b.upper() in v]
+        if var_name:
+            # Convertimos a float32 y extraemos a numpy
+            bandas[b] = ds[var_name[0]].values.astype('float32')
+        else:
+            # Si no existe, creamos una matriz de ceros del mismo tamaño que la primera encontrada
+            bandas[b] = np.zeros_like(next(iter(bandas.values()))) if bandas else np.zeros((100,100))
 
+    meta = {
+        "sensor": ds.attrs.get('title', ds.attrs.get('sensor', 'Dataset Científico')),
+        "fecha": ds.attrs.get('time_coverage_start', 'Fecha en Metadatos'),
+        "resolucion_m": "Variable / Proyectada",
+        "area_m2": "Calculada por Atributos",
+        "crs": str(ds.rio.crs) if hasattr(ds, 'rio') else "EPSG:4326 (Asumido)",
+    }
+    
+    ds.close()
+    return bandas, meta
 
 def leer_imagen_simple(path):
     """
-    PNG sin georreferencia.
-    Requiere asumir resolución o marcar como 'no georreferenciado'
+    Maneja imágenes estándar sin contexto espacial.
+    Asume que la imagen es RGB. R=Banda 4, G=Banda 3, B=Banda 2.
     """
-    pass
+    img = Image.open(path).convert('RGB')
+    arr = np.array(img).astype('float32') / 255.0 # Normalizamos a 0-1
+    
+    # En un PNG RGB, no tenemos NIR (Infrarrojo Cercano). 
+    # Para que el script no rompa, simulamos una banda NIR basada en el canal verde 
+    # (muy común en 'falso NDVI') o la dejamos vacía.
+    bandas = {
+        "B04": arr[:, :, 0], # Rojo
+        "B03": arr[:, :, 1], # Verde
+        "B02": arr[:, :, 2], # Azul
+        "B08": arr[:, :, 1] * 1.2 # Simulación de NIR para permitir cálculo de NDVI
+    }
+    
+    meta = {
+        "sensor": "Cámara Digital Estándar (No Espectral)",
+        "fecha": "N/A (Imagen cargada por usuario)",
+        "resolucion_m": 0.0, # Indicar 0 para que la IA sepa que no hay escala
+        "area_m2": 0.0,
+        "crs": "No Georreferenciado",
+        "nota": "Análisis basado en aproximación visual RGB"
+    }
+    
+    return bandas, meta
 
 def muestrear_indice(arr, meta, resolucion_objetivo_m):
     # Eliminamos valores fuera de rango o nulos (típicos en bordes de imágenes)
