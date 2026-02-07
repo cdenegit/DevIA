@@ -23,11 +23,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("analisis_index")
 
-api_key = os.getenv("GEMINI_API_KEY")
-if not api_key:
-    logger.error("❌ CRÍTICO: GEMINI_API_KEY no encontrada en variables de entorno")
-else:
-    genai.configure(api_key=api_key)
 # =========================
 # 📥 Request schemas
 # =========================
@@ -35,13 +30,7 @@ class InitRequest(BaseModel):
     index_name: str
     aspctos_inv: str
     nmbre_fnca: str
-
-class Request(BaseModel):
-    nmbre_fnca: str
-    geojson: str
-    index_name: str
-    aspctos_inv: str
-    file: str  
+    
 # --- FUNCIONES DE CÁLCULO ESTADÍSTICO (Información Vital para la IA) ---
 
 @app.get("/")
@@ -286,6 +275,7 @@ async def analisis_index(
     geojson: str = Form(...),
     index_name: str = Form(...),
     aspctos_inv: str = Form(...),
+    gemini_key: str = Form(...), # <-- RECIBIMOS LA LLAVE
     file: UploadFile = File(...)
 ):
     # 1. Gestión de archivo
@@ -335,7 +325,11 @@ async def analisis_index(
         # 5. Construcción del Prompt
         prompt = generar_prompt_experto(index_name, stats, meta, aspctos_inv)
 
-        # 6.1. Invocación a Gemini 1.5 Flash
+        # 6.1. Invocación a Gemini 1.5 Flash y Configuración dinámica de la IA dentro del endpoint
+        if not gemini_key:
+            raise ValueError("No se recibió la API Key de Gemini desde el servidor.")
+        
+        genai.configure(api_key=gemini_key)
         model = genai.GenerativeModel('gemini-1.5-flash')
         response = model.generate_content(prompt)
         diagnostico_texto = response.text
