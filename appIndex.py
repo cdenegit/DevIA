@@ -104,60 +104,55 @@ def generar_prompt_experto(index_name, stats, meta, aspectos):
 # 📂 Funciones de Lectura
 # =========================
 
-def leer_raster_gdal(path):
-    """Lee el raster intentando extraer bandas 1 y 2 (NIR/RED) con seguridad."""
-
 def leer_raster_gdal(path, bandas_solicitadas):
     with rasterio.open(path) as src:
-        # --- CAMBIO EXACTO AQUÍ ---
-        # Leemos la banda 1 como base obligatoria
-        b1 = src.read(1).astype('float32')
+        logger.info(f"📖 Rasterio abrió el archivo. Bandas: {src.count}")
+        
+        # --- FUNCIÓN INTERNA DE NORMALIZACIÓN ---
+        def normalizar_banda(arr):
+            # Si el valor máximo es alto (ej. 10000), es reflectancia escalada.
+            # Si es > 1, dividimos para llevar a rango 0-1.
+            max_val = np.max(arr)
+            if max_val > 255: 
+                return arr.astype('float32') / 10000.0
+            elif max_val > 1.0: 
+                return arr.astype('float32') / 255.0
+            return arr.astype('float32')
+
+        # --- LECTURA SEGURO DE TODAS LAS BANDAS ---
+        # Leemos la 1 para tener un fallback consistente
+        b_base = src.read(1)
         
         bandas = {
-            "B08": b1, # NIR (Asumimos banda 1 si es satelital básico)
-            "B04": src.read(2).astype('float32') if src.count >= 2 else b1,
-            "B03": src.read(3).astype('float32') if src.count >= 3 else b1,
-            "B02": src.read(4).astype('float32') if src.count >= 4 else b1,
-            "B05": src.read(5).astype('float32') if src.count >= 5 else b1
+            "B08": normalizar_banda(b_base),
+            "B04": normalizar_banda(src.read(2)) if src.count >= 2 else normalizar_banda(b_base),
+            "B03": normalizar_banda(src.read(3)) if src.count >= 3 else normalizar_banda(b_base),
+            "B02": normalizar_banda(src.read(4)) if src.count >= 4 else normalizar_banda(b_base),
+            "B05": normalizar_banda(src.read(5)) if src.count >= 5 else normalizar_banda(b_base)
         }
-    
-    with rasterio.open(path) as src:
-        # Extraer metadatos con seguridad (usando .get o validando existencia)
+
+        # --- EXTRACCIÓN DE METADATOS ---
         tags = src.tags()
         sensor = tags.get('TIFFTAG_SOFTWARE', tags.get('SENSOR_ID', 'Sensor No Identificado'))
         fecha = tags.get('TIFFTAG_DATETIME', tags.get('ACQUISITION_DATE', 'Fecha No Disponible'))
-        
-        # Leemos bandas. Si no tiene 2 bandas, duplicamos la 1 para que no de error el cálculo
-        try:
-            b1 = src.read(1).astype('float32')
-            b2 = src.read(2).astype('float32') if src.count >= 2 else b1
-        except Exception as e:
-            logger.warning(f"Error leyendo bandas, usando fallback: {e}")
-            b1 = src.read(1).astype('float32')
-            b2 = b1
 
-        # Manejo seguro de geotransformación (Evita el Error 500 si no hay CRS)
-        res = 0.0
-        area = 0.0
-        try:
-            if src.res and len(src.res) > 0:
-                res = float(src.res[0])
-            if src.bounds:
-                area = float((src.bounds.right - src.bounds.left) * (src.bounds.top - src.bounds.bottom))
-        except:
-            pass # Si falla, se quedan en 0.0
+        # Cálculo de resolución y área real
+        # Si src.res es (1.0, 1.0) suele ser un error de georreferencia, asumimos 10m (Sentinel)
+        res_m = src.res[0] if (src.res and src.res[0] != 1.0) else 10.0
+        
+        # Área basada en píxeles y resolución para evitar errores de CRS
+        area_calculada = float(src.width * src.height * (res_m ** 2))
 
         meta = {
             "sensor": sensor,
             "fecha": fecha,
-            "resolucion_m": res,
-            "area_m2": abs(area),
+            "resolucion_m": res_m,
+            "area_m2": area_calculada,
             "crs": str(src.crs) if src.crs else "No Georreferenciado",
-            "width": src.width,
-            "height": src.height
+            "ancho": src.width,
+            "alto": src.height
         }
         
-        bandas = {"B08": b1, "B04": b2, "B03": b1, "B02": b1} # Mapeo básico
         return bandas, meta
  
 def leer_raster_cientifico(path, bandas_solicitadas):
@@ -302,48 +297,26 @@ async def analisis_index(
     modelo_ia: str = Form(...),
     file: UploadFile = File(...)
 ):
-# 1. Gestión de archivo con escritura física previa
     file_id = str(uuid.uuid4())
     ext = os.path.splitext(file.filename)[1].lower()
     temp_path = os.path.join(tempfile.gettempdir(), f"{file_id}_{file.filename}")
     
     try:
-        # Guardar el archivo físicamente para que Rasterio no encuentre bloqueos
         content = await file.read()
         with open(temp_path, "wb") as f:
             f.write(content)
         
-        logger.info(f"✅ Archivo guardado físicamente: {temp_path}")
-
-    # 2. Lectura según tipo (Detección y extracción unificada)
+        # --- SECCIÓN DE LECTURA MODULARIZADA ---
         tipo_archivo = detectar_tipo_archivo(temp_path)
         
         if tipo_archivo == "raster_gdal":
-            # Usamos la lógica de bandas segura que ya definimos
-            with rasterio.open(temp_path) as src:
-                logger.info(f"📖 Rasterio abrió el archivo. Bandas: {src.count}")
-                b1 = src.read(1).astype('float32')
-                bandas = {
-                    "B08": b1,
-                    "B04": src.read(2).astype('float32') if src.count >= 2 else b1,
-                    "B03": src.read(3).astype('float32') if src.count >= 3 else b1,
-                    "B02": src.read(4).astype('float32') if src.count >= 4 else b1,
-                    "B05": src.read(5).astype('float32') if src.count >= 5 else b1
-                }
-                meta = {
-                    "sensor": src.tags().get('SENSOR_ID', 'Satelital/Drone'),
-                    "fecha": src.tags().get('ACQUISITION_DATE', 'Reciente'),
-                    "resolucion_m": src.res[0] if src.res else 0,
-                    "ancho": src.width, "alto": src.height,
-                    "area_m2": (src.bounds.right - src.bounds.left) * (src.bounds.top - src.bounds.bottom) if src.bounds else 0
-                }
-
+            # REEMPLAZO: Llamada a la función externa
+            bandas, meta = leer_raster_gdal(temp_path)
+            
         elif tipo_archivo == "raster_cientifico":
-            # Aquí llamas a tu función poderosa para NetCDF/HDF5
             bandas, meta = leer_raster_cientifico(temp_path, ["B08", "B04", "B03", "B02"])
 
         else: # imagen_simple (PNG/JPG)
-            # Aquí aplicas la lógica de Image.open que tenías preparada
             img = Image.open(temp_path).convert('RGB')
             arr = np.array(img).astype('float32') / 255.0
             bandas = {"B08": arr[:,:,1]*1.2, "B04": arr[:,:,0]} 
