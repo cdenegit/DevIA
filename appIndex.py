@@ -199,16 +199,31 @@ def leer_imagen_simple(path):
 
 def ejecutar_calculo_indice(bandas, index_name):
     eps = 1e-10
-    
-    # Extraemos bandas con fallback: si una no existe, usamos la B08 para evitar que np.array falle
+    # 1. Extraemos las bandas base para la validación inicial
+    # Usamos B8 y B4 como estándares (NIR y RED)
     B8 = bandas.get("B08")
     B4 = bandas.get("B04") if bandas.get("B04") is not None else B8
+    
+    # --- PROTECCIÓN PARA IMÁGENES DE 1 BANDA (La que te gustó) ---
+    # Si NIR y RED son iguales, el NDVI daría 0. Devolvemos la banda original.
+    if np.array_equal(B8, B4):
+        logger.warning(f"⚠️ Imagen monobanda detectada para {index_name}. Usando reflectancia base.")
+        return B8 
+
+    # --- CASO ESPECIAL: NDVI (Tu lógica explícita) ---
+    if index_name.upper() == 'NDVI':
+        logger.info("🧪 Calculando NDVI con lógica explícita")
+        with np.errstate(divide='ignore', invalid='ignore'):
+            idx = (B8 - B4) / (B8 + B4 + eps)
+            return np.nan_to_num(idx, nan=0.0)
+
+    # --- RESTO DE ÍNDICES (EVI, MSAVI, etc.) ---
+    # Si no es NDVI, buscamos en el diccionario de fórmulas
     B3 = bandas.get("B03") if bandas.get("B03") is not None else B8
     B2 = bandas.get("B02") if bandas.get("B02") is not None else B4
     B5 = bandas.get("B05") if bandas.get("B05") is not None else B4
 
     formulas = {
-        "ndvi":  lambda: (B8 - B4) / (B8 + B4 + eps),
         "evi":   lambda: 2.5 * ((B8 - B4) / (B8 + 6 * B4 - 7.5 * B2 + 1 + eps)),
         "ndwi":  lambda: (B3 - B8) / (B3 + B8 + eps),
         "ndre":  lambda: (B8 - B5) / (B8 + B5 + eps),
@@ -217,16 +232,18 @@ def ejecutar_calculo_indice(bandas, index_name):
     }
 
     func = formulas.get(index_name.lower())
-    if not func:
-        raise ValueError(f"Índice {index_name} no implementado.")
     
+    if not func:
+        logger.warning(f"⚠️ Índice {index_name} no reconocido, usando B8 como fallback.")
+        return B8
+
     try:
         res = func()
-        # Limpieza de seguridad para la IA: eliminar NaNs e Infinitos
-        res = np.nan_to_num(res, nan=0.0, posinf=1.0, neginf=-1.0)
-        return res
+        return np.nan_to_num(res, nan=0.0, posinf=1.0, neginf=-1.0)
     except Exception as e:
-        raise ValueError(f"Error matemático al calcular {index_name}: {str(e)}")
+        logger.error(f"❌ Error en cálculo de {index_name}: {e}")
+        return B8
+
 
 def muestrear_indice(arr, meta, resolucion_objetivo_m):
     valores_validos = arr[~np.isnan(arr)]
