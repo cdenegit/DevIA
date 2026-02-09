@@ -104,7 +104,7 @@ def generar_prompt_experto(index_name, stats, meta, aspectos):
 # 📂 Funciones de Lectura
 # =========================
 
-def leer_raster_gdal(path, bandas_solicitadas):
+def leer_raster_gdal(path, bandas_solicitadas=None):
     with rasterio.open(path) as src:
         logger.info(f"📖 Rasterio abrió el archivo. Bandas: {src.count}")
         
@@ -311,7 +311,7 @@ async def analisis_index(
         
         if tipo_archivo == "raster_gdal":
             # REEMPLAZO: Llamada a la función externa
-            bandas, meta = leer_raster_gdal(temp_path)
+            bandas, meta = leer_raster_gdal(temp_path, ["B08", "B04", "B03", "B02", "B05"])
             
         elif tipo_archivo == "raster_cientifico":
             bandas, meta = leer_raster_cientifico(temp_path, ["B08", "B04", "B03", "B02"])
