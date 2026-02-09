@@ -285,7 +285,7 @@ def generar_pdf_diagnostico(texto_markdown, nombre_finca):
 @app.post("/iniciar")
 def iniciar(req: InitRequest):
     logger.info(f"🚀 Iniciando análisis: {req.index_name}")
-    return {"status": "ok", "recibido": True}
+    return {"status": "ok", "Iniciado": True}
 
 @app.post("/analisis_index")
 async def analisis_index(
