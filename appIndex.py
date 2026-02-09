@@ -309,9 +309,8 @@ async def analisis_index(
     aspctos_inv: str = Form(...),
     gemini_key: str = Form(...),
     modelo_ia: str = Form(...),
-    file: UploadFile = File(...)
-):
-    logger.info(f"📥 Recibida petición para finca: {nmbre_fnca}")
+    file: UploadFile = File(...) ):
+        
     # 1. Gestión de archivo
     file_id = str(uuid.uuid4())
     ext = os.path.splitext(file.filename)[1].lower()
@@ -339,7 +338,7 @@ async def analisis_index(
             meta = {"sensor": "Cámara Convencional", "area_m2": 0, "resolucion_m": 0, "ancho": arr.shape[1], "alto": arr.shape[0]}
 
         meta["finca"] = nmbre_fnca
-
+        logger.info(f"📥 Bandas Procesadas para finca: {nmbre_fnca}  bandas { bandas}  meta {meta} ")
         # 3. CÁLCULO UNIFICADO (Usando tu función de álgebra corregida)
         # Esta función ya maneja NDVI, EVI, MSAVI, etc.
         idx_map = ejecutar_calculo_indice(bandas, index_name)
