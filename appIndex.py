@@ -106,12 +106,10 @@ def generar_prompt_experto(index_name, stats, meta, aspectos):
 
 def leer_raster_gdal(path, bandas_solicitadas=None):
     with rasterio.open(path) as src:
-        logger.info(f"📖 Rasterio abrió el archivo. Bandas: {src.count}")
+        num_bandas = src.count
+        logger.info(f"📖 Rasterio procesando: {num_bandas} bandas detectadas.")
         
-        # --- FUNCIÓN INTERNA DE NORMALIZACIÓN ---
         def normalizar_banda(arr):
-            # Si el valor máximo es alto (ej. 10000), es reflectancia escalada.
-            # Si es > 1, dividimos para llevar a rango 0-1.
             max_val = np.max(arr)
             if max_val > 255: 
                 return arr.astype('float32') / 10000.0
@@ -119,33 +117,32 @@ def leer_raster_gdal(path, bandas_solicitadas=None):
                 return arr.astype('float32') / 255.0
             return arr.astype('float32')
 
-        # --- LECTURA SEGURO DE TODAS LAS BANDAS ---
-        # Leemos la 1 para tener un fallback consistente
-        b_base = src.read(1)
+        # Leemos la primera banda como base
+        b1 = normalizar_banda(src.read(1))
         
+        # Diccionario de bandas con Fallback (Si no existe la banda, usa la 1)
         bandas = {
-            "B08": normalizar_banda(b_base),
-            "B04": normalizar_banda(src.read(2)) if src.count >= 2 else normalizar_banda(b_base),
-            "B03": normalizar_banda(src.read(3)) if src.count >= 3 else normalizar_banda(b_base),
-            "B02": normalizar_banda(src.read(4)) if src.count >= 4 else normalizar_banda(b_base),
-            "B05": normalizar_banda(src.read(5)) if src.count >= 5 else normalizar_banda(b_base)
+            "B08": b1, 
+            "B04": normalizar_banda(src.read(2)) if num_bandas >= 2 else b1,
+            "B03": normalizar_banda(src.read(3)) if num_bandas >= 3 else b1,
+            "B02": normalizar_banda(src.read(4)) if num_bandas >= 4 else b1,
+            "B05": normalizar_banda(src.read(5)) if num_bandas >= 5 else b1
         }
 
-        # --- EXTRACCIÓN DE METADATOS ---
+        # --- EXTRACCIÓN DE METADATOS (Línea recuperada y mejorada) ---
         tags = src.tags()
         sensor = tags.get('TIFFTAG_SOFTWARE', tags.get('SENSOR_ID', 'Sensor No Identificado'))
-        fecha = tags.get('TIFFTAG_DATETIME', tags.get('ACQUISITION_DATE', 'Fecha No Disponible'))
-
-        # Cálculo de resolución y área real
-        # Si src.res es (1.0, 1.0) suele ser un error de georreferencia, asumimos 10m (Sentinel)
-        res_m = src.res[0] if (src.res and src.res[0] != 1.0) else 10.0
         
-        # Área basada en píxeles y resolución para evitar errores de CRS
+        # Aquí está tu línea original intacta:
+        fecha = tags.get('TIFFTAG_DATETIME', tags.get('ACQUISITION_DATE', 'Fecha No Disponible'))
+        
+        # Resolución y Área (con seguridad para drones sin GPS)
+        res_m = src.res[0] if (src.res and src.res[0] != 1.0 and src.res[0] != 0) else 0.05
         area_calculada = float(src.width * src.height * (res_m ** 2))
 
         meta = {
             "sensor": sensor,
-            "fecha": fecha,
+            "fecha": fecha, # <--- Se mantiene el valor recuperado de los tags
             "resolucion_m": res_m,
             "area_m2": area_calculada,
             "crs": str(src.crs) if src.crs else "No Georreferenciado",
