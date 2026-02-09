@@ -297,6 +297,8 @@ async def analisis_index(
     modelo_ia: str = Form(...),
     file: UploadFile = File(...)
 ):
+    logger.info(f"📥 Recibida petición para finca: {nmbre_fnca}")
+    # 1. Gestión de archivo
     file_id = str(uuid.uuid4())
     ext = os.path.splitext(file.filename)[1].lower()
     temp_path = os.path.join(tempfile.gettempdir(), f"{file_id}_{file.filename}")
@@ -306,7 +308,7 @@ async def analisis_index(
         with open(temp_path, "wb") as f:
             f.write(content)
         
-        # --- SECCIÓN DE LECTURA MODULARIZADA ---
+        # 2. Lectura según tipo
         tipo_archivo = detectar_tipo_archivo(temp_path)
         
         if tipo_archivo == "raster_gdal":
