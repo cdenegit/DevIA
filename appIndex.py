@@ -403,20 +403,10 @@ async def analisis_index(
         #diagnostico_texto = response.text
 
         # 7. GENERACIÓN DE PDF (Base64)
-        pdf_base64 = generar_pdf_diagnostico(diagnostico_texto, nmbre_fnca)
+        # pdf_base64 = generar_pdf_diagnostico(diagnostico_texto, nmbre_fnca)
         pdf_base64 = generar_pdf_diagnostico(prompt, nmbre_fnca)
 
         # 8. RETORNO ESTRUCTURADO FINAL
-        return {
-            "status": "success",
-            "finca": nmbre_fnca,
-            # "indice": index_name.upper(),
-            "indices": indices_calculados[idx_key],
-            "estadisticas": stats,
-            "metadatos": meta,
-            "muestreo_grafica": muestras,
-            "Diagnostico_ia": pdf_base64
-        }
 
         resultado = {
             "status": "success",
