@@ -411,12 +411,29 @@ async def analisis_index(
             "status": "success",
             "finca": nmbre_fnca,
             # "indice": index_name.upper(),
-            "indices": indices_calculados[idx_key]
+            "indices": indices_calculados[idx_key],
             "estadisticas": stats,
             "metadatos": meta,
             "muestreo_grafica": muestras,
             "Diagnostico_ia": pdf_base64
         }
+
+        resultado = {
+            "status": "success",
+            "finca": nmbre_fnca,
+            # Mantenemos el nombre del índice principal (o "TODOS")
+            "indice": index_name.upper(), 
+            # Enviamos el diccionario de múltiples índices solo si se calculó
+            "indices_calculados": indices_calculados if index_name.upper() == "TODOS" else None,
+            # 'stats' contendrá el índice principal (o el NDVI por defecto si fue TODOS)
+            "estadisticas": stats,
+            "metadatos": meta,
+            "muestreo_grafica": muestras,
+            "Diagnostico_ia": pdf_base64
+        }
+        
+        logger.info(f"🚀 Enviando respuesta exitosa para {nmbre_fnca}")
+        return resultado
 
     except Exception as e:
         logger.error(f"❌ Error crítico en el análisis: {str(e)}", exc_info=True)
