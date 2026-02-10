@@ -52,51 +52,56 @@ def calcular_estadisticas_pro(valores):
         "p90": float(np.nanpercentile(valores, 90)),
         "varianza": float(np.nanvar(valores))
     }
-def generar_prompt_experto(index_name, stats, meta, aspectos):
-    # 1. Preparamos los valores formateados para evitar comillas anidadas en el f-string
+    
+def generar_prompt_experto(index_name, stats, meta, aspectos, indices_multiples=None):
     finca = meta.get('finca', 'N/A')
     sensor = meta.get('sensor', 'No especificado')
     fecha = meta.get('fecha', 'N/A')
     area = f"{meta.get('area_m2', 0):,.2f}"
     resolucion = meta.get('resolucion_m', 'N/A')
     
-    # 2. Creamos un diccionario local con los strings ya formateados
-    # Esto elimina la necesidad de usar :.4f dentro del bloque de texto
+    # Formateo de estadísticas principales (normalmente NDVI o el seleccionado)
     s = {k: f"{v:.4f}" if isinstance(v, (int, float)) else v for k, v in stats.items()}
 
-    # 3. Usamos triple comilla simple (''') para el bloque de texto. 
-    # Es menos propenso a errores cuando el contenido tiene comillas dobles.
+    # Sección extra si el usuario eligió "TODOS"
+    bloque_comparativo = ""
+    if indices_multiples:
+        bloque_comparativo = "\n=== COMPARATIVA MULTIESPECTRAL (TODOS LOS ÍNDICES) ===\n"
+        for idx, val in indices_multiples.items():
+            bloque_comparativo += f"- {idx.upper()}: Media={val['media']:.4f}, Máx={val['max']:.4f}, Mín={val['min']:.4f}\n"
+
     prompt = f'''
     Eres un Agente de IA especializado en Teledetección y Agronomía de Precisión.
     Tu misión es diagnosticar el estado del cultivo en la finca "{finca}".
     
     === CONTEXTO TÉCNICO ===
-    - Índice Analizado: {index_name.upper()}
+    - Análisis Principal: {index_name.upper()}
     - Sensor: {sensor} | Fecha: {fecha}
-    - Área: {area} m²
-    - Resolución: {resolucion} metros/píxel
+    - Área: {area} m² | Resolución: {resolucion} m/px
+    {bloque_comparativo}
     
-    === RADIOGRAFÍA ESTADÍSTICA DEL ÍNDICE ===
+    === RADIOGRAFÍA ESTADÍSTICA ({index_name.upper()}) ===
     - Rango: [{s['min']} a {s['max']}]
-    - Promedio Central (Media): {s['media']}
-    - Robustez (Mediana): {s['mediana']}
+    - Promedio (Media): {s['media']} | Robustez (Mediana): {s['mediana']}
     - Dispersión (Desviación Std): {s['std']}
     - Distribución de Vigor:
-      * 10% del área (Crítico): Inferior a {s['p10']}
-      * 25% del área (Bajo): Inferior a {s['p25']}
-      * 75% del área (Bueno): {s['p75']}
-      * 90% del área (Óptimo): Superior a {s['p90']}
+      * 10% (Crítico): < {s['p10']}
+      * 25% (Bajo): < {s['p25']}
+      * 75% (Bueno): > {s['p75']}
+      * 90% (Óptimo): > {s['p90']}
     
     === OBJETIVO DEL USUARIO ===
-    El productor está investigando: "{aspectos}"
+    "{aspectos}"
     
     === TAREA DE DIAGNÓSTICO ===
-    1. Interpretación de Salud: Basado en el {index_name.upper()}, ¿qué indican estos valores para este tipo de sensor?
-    2. Análisis de Homogeneidad: Compara la media con los percentiles {s['p10']} y {s['p90']}. ¿Es un cultivo uniforme o fragmentado?
-    3. Respuesta a la Investigación: Aborda específicamente los aspectos solicitados por el usuario.
-    4. Plan de Acción: Proporciona 3 recomendaciones técnicas (ej: fertilización variable, riego, muestreo foliar).
+    1. Interpretación de Salud: Analiza el {index_name.upper()}. Si hay múltiples índices, correlaciónalos (ej: ¿el NDWI de agua confirma el estrés del NDVI?).
+    2. Análisis de Homogeneidad: ¿Es un cultivo uniforme o fragmentado?
+    3. Respuesta a la Investigación: Aborda los aspectos solicitados.
+    4. Plan de Acción: Proporciona 3 recomendaciones técnicas basadas en la variabilidad detectada.
+
+    *Nota de Seguridad:* Si los valores son negativos o inusuales para vegetación, indica si puede ser por el tipo de sensor o cobertura de suelo (nubes, sombras, suelo desnudo).
     
-    Responde en formato Markdown, con tono profesional y científico.
+    Responde en formato Markdown profesional.
     '''
     return prompt
     
@@ -117,32 +122,47 @@ def leer_raster_gdal(path, bandas_solicitadas=None):
                 return arr.astype('float32') / 255.0
             return arr.astype('float32')
 
-        # Leemos la primera banda como base
-        b1 = normalizar_banda(src.read(1))
-        
-        # Diccionario de bandas con Fallback (Si no existe la banda, usa la 1)
-        bandas = {
-            "B08": b1, 
-            "B04": normalizar_banda(src.read(2)) if num_bandas >= 2 else b1,
-            "B03": normalizar_banda(src.read(3)) if num_bandas >= 3 else b1,
-            "B02": normalizar_banda(src.read(4)) if num_bandas >= 4 else b1,
-            "B05": normalizar_banda(src.read(5)) if num_bandas >= 5 else b1
-        }
+        # --- LÓGICA DE ASIGNACIÓN INTELIGENTE ---
+        if num_bandas >= 3:
+            # Si tiene 3 o más, asumimos orden estándar RGB para las primeras 3
+            # Pero si tiene 8 o más (como Sentinel completo), el orden cambia.
+            # Para este FIX, mapeamos basado en la realidad de tus archivos RGB:
+            r = normalizar_banda(src.read(1))
+            g = normalizar_banda(src.read(2))
+            b = normalizar_banda(src.read(3))
+            
+            # Si es una imagen RGB (3 bandas), no hay NIR real. 
+            # Usamos el canal Rojo como B04 y el Verde como B08 para "simular" vigor 
+            # o simplemente no dar negativos absurdos.
+            bandas = {
+                "B08": normalizar_banda(src.read(8)) if num_bandas >= 8 else g, # NIR real o Verde
+                "B04": r, # Rojo
+                "B03": g, # Verde
+                "B02": b, # Azul
+                "B05": normalizar_banda(src.read(5)) if num_bandas >= 5 else g
+            }
+        else:
+            # Fallback para monobanda (tu código original)
+            b1 = normalizar_banda(src.read(1))
+            bandas = {
+                "B08": b1, 
+                "B04": normalizar_banda(src.read(2)) if num_bandas >= 2 else b1,
+                "B03": normalizar_banda(src.read(3)) if num_bandas >= 3 else b1,
+                "B02": normalizar_banda(src.read(4)) if num_bandas >= 4 else b1,
+                "B05": normalizar_banda(src.read(5)) if num_bandas >= 5 else b1
+            }
 
-        # --- EXTRACCIÓN DE METADATOS (Línea recuperada y mejorada) ---
+        # --- EXTRACCIÓN DE METADATOS (Tu bloque intacto) ---
         tags = src.tags()
         sensor = tags.get('TIFFTAG_SOFTWARE', tags.get('SENSOR_ID', 'Sensor No Identificado'))
-        
-        # Aquí está tu línea original intacta:
         fecha = tags.get('TIFFTAG_DATETIME', tags.get('ACQUISITION_DATE', 'Fecha No Disponible'))
         
-        # Resolución y Área (con seguridad para drones sin GPS)
         res_m = src.res[0] if (src.res and src.res[0] != 1.0 and src.res[0] != 0) else 0.05
         area_calculada = float(src.width * src.height * (res_m ** 2))
 
         meta = {
             "sensor": sensor,
-            "fecha": fecha, # <--- Se mantiene el valor recuperado de los tags
+            "fecha": fecha,
             "resolucion_m": res_m,
             "area_m2": area_calculada,
             "crs": str(src.crs) if src.crs else "No Georreferenciado",
@@ -338,20 +358,34 @@ async def analisis_index(
             meta = {"sensor": "Cámara Convencional", "area_m2": 0, "resolucion_m": 0, "ancho": arr.shape[1], "alto": arr.shape[0]}
 
         meta["finca"] = nmbre_fnca
-        logger.info(f"📥 Bandas Procesadas para finca: {nmbre_fnca}  bandas { bandas}  meta {meta} ")
+        logger.info(f"📥 Info finca: {nmbre_fnca}  bandas {bandas}  meta {meta} ")
         # 3. CÁLCULO UNIFICADO (Usando tu función de álgebra corregida)
         # Esta función ya maneja NDVI, EVI, MSAVI, etc.
-        idx_map = ejecutar_calculo_indice(bandas, index_name)
 
-        # 4. ESTADÍSTICAS Y MUESTREO
-        # Limpieza de valores para evitar errores en el JSON final
+        # 3. PROCESAMIENTO DE ÍNDICES
+        indices_calculados = None        
+        if index_name.upper() == "TODOS":
+            indices_calculados = {}
+            for idx_key in ["ndvi", "evi", "ndwi", "msavi", "ndre", "reci"]:
+                res_idx = ejecutar_calculo_indice(bandas, idx_key)
+                indices_calculados[idx_key] = {
+                    "media": float(np.mean(res_idx)),
+                    "max": float(np.max(res_idx)),
+                    "min": float(np.min(res_idx))
+                }
+            # Asignamos NDVI a idx_map para que las estadísticas generales sigan funcionando
+            idx_map = ejecutar_calculo_indice(bandas, "ndvi")
+        else:
+            idx_map = ejecutar_calculo_indice(bandas, index_name)
+
+        # 4. ESTADÍSTICAS Y MUESTREO (Ahora idx_map siempre existe)
         valores_limpios = idx_map[~np.isnan(idx_map)]
         if valores_limpios.size == 0:
             raise ValueError("El sensor no retornó datos válidos para este índice.")
 
+        # Estas stats se basan en idx_map (el índice elegido o el NDVI si es TODOS)
         stats = calcular_estadisticas_pro(valores_limpios)
         
-        # Muestreo representativo para la gráfica en PHP/JS
         num_muestras = min(2000, len(valores_limpios))
         muestras = np.random.choice(valores_limpios, num_muestras, replace=False).tolist()
 
@@ -364,18 +398,20 @@ async def analisis_index(
         model = genai.GenerativeModel(model_name=modelo_ia) 
 
         # 6. PROMPT Y DIAGNÓSTICO
-        prompt = generar_prompt_experto(index_name, stats, meta, aspctos_inv)
-        response = model.generate_content(prompt)
-        diagnostico_texto = response.text
+        prompt = generar_prompt_experto( index_name, stats, meta, aspctos_inv, indices_multiples=indices_calculados )
+        #response = model.generate_content(prompt)
+        #diagnostico_texto = response.text
 
         # 7. GENERACIÓN DE PDF (Base64)
         pdf_base64 = generar_pdf_diagnostico(diagnostico_texto, nmbre_fnca)
+        pdf_base64 = generar_pdf_diagnostico(prompt, nmbre_fnca)
 
         # 8. RETORNO ESTRUCTURADO FINAL
         return {
             "status": "success",
             "finca": nmbre_fnca,
-            "indice": index_name.upper(),
+            # "indice": index_name.upper(),
+            "indices": indices_calculados[idx_key]
             "estadisticas": stats,
             "metadatos": meta,
             "muestreo_grafica": muestras,
