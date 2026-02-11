@@ -403,6 +403,15 @@ async def analisis_index(
 
         # Estas stats se basan en idx_map (el índice elegido o el NDVI si es TODOS)
         stats = calcular_estadisticas_pro(valores_limpios)
+
+        # --- ESTADÍSTICAS DE BANDAS PURAS ---
+        stats_bandas = {}
+        for nombre_banda, matriz in bandas.items():
+            # Solo bandas reales, evitamos procesar índices aquí
+            stats_bandas[nombre_banda.upper()] = {
+                "media": float(np.nanmean(matriz)),
+                "max": float(np.nanmax(matriz))
+            }        
         
         num_muestras = min(2000, len(valores_limpios))
         muestras = np.random.choice(valores_limpios, num_muestras, replace=False).tolist()
@@ -429,11 +438,9 @@ async def analisis_index(
         resultado = {
             "status": "success",
             "finca": nmbre_fnca,
-            # Mantenemos el nombre del índice principal (o "TODOS")
-            "indice": index_name.upper(), 
-            # Enviamos el diccionario de múltiples índices solo si se calculó
+            "indice": index_name.upper(),
             "indices_calculados": indices_calculados if index_name.upper() == "TODOS" else None,
-            # 'stats' contendrá el índice principal (o el NDVI por defecto si fue TODOS)
+            "stats_bandas": stats_bandas, 
             "estadisticas": stats,
             "metadatos": meta,
             "muestreo_grafica": muestras,
