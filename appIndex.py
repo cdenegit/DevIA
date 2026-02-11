@@ -152,12 +152,30 @@ def leer_raster_gdal(path, bandas_solicitadas=None):
                 "B05": normalizar_banda(src.read(5)) if num_bandas >= 5 else b1
             }
 
-        # --- EXTRACCIÓN DE METADATOS (Tu bloque intacto) ---
+# --- EXTRACCIÓN DE METADATOS OPTIMIZADA ---
         tags = src.tags()
-        sensor = tags.get('TIFFTAG_SOFTWARE', tags.get('SENSOR_ID', 'Sensor No Identificado'))
-        fecha = tags.get('TIFFTAG_DATETIME', tags.get('ACQUISITION_DATE', 'Fecha No Disponible'))
         
-        res_m = src.res[0] if (src.res and src.res[0] != 1.0 and src.res[0] != 0) else 0.05
+        # 1. Búsqueda exhaustiva del Sensor
+        sensor = tags.get('TIFFTAG_SOFTWARE', 
+                 tags.get('SENSOR_ID', 
+                 tags.get('Make', 'Micasense'))) # Micasense suele ir en 'Make'
+        
+        # 2. Búsqueda exhaustiva de la Fecha
+        fecha = tags.get('TIFFTAG_DATETIME', 
+                tags.get('ACQUISITION_DATE', 
+                tags.get('DateTime', 'Fecha No Disponible')))
+
+        # 3. CORRECCIÓN DE RESOLUCIÓN (Metros vs Grados)
+        raw_res = src.res[0]
+        res_m = raw_res
+        
+        # Si la resolución es pequeñísima (ej: 9.02e-05), está en grados.
+        # Convertimos grados a metros aproximadamente (1 grado ≈ 111,111 metros)
+        if raw_res < 0.01 and raw_res != 0:
+            res_m = raw_res * 111111  # Conversión simple a nivel de Ecuador
+        elif raw_res == 1.0 or raw_res == 0:
+            res_m = 0.05  # Valor fallback por defecto (5cm)
+
         area_calculada = float(src.width * src.height * (res_m ** 2))
 
         meta = {
