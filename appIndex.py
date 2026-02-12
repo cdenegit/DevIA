@@ -53,55 +53,70 @@ def calcular_estadisticas_pro(valores):
         "varianza": float(np.nanvar(valores))
     }
     
-def generar_prompt_experto(index_name, stats, meta, aspectos, indices_multiples=None):
+def generar_prompt_experto(index_name, stats, meta, aspectos, indices_multiples=None, stats_bandas=None):
     finca = meta.get('finca', 'N/A')
     sensor = meta.get('sensor', 'No especificado')
     fecha = meta.get('fecha', 'N/A')
-    area = f"{meta.get('area_m2', 0):,.2f}"
-    resolucion = meta.get('resolucion_m', 'N/A')
+    # Limpieza de la consulta para evitar el ""
+    objetivo = aspectos if (aspectos and aspectos.strip()) else "Realizar un diagnóstico Agronomico integral del los Datos."
+       
+    # --- OPTIMIZACIÓN DE UNIDADES ---
+    area_ha = meta.get('area_m2', 0) / 10000
+    # Convertimos resolución a cm para que la IA entienda que es un DRONE
+    gsd_cm = meta.get('resolucion_m', 0) * 100
     
-    # Formateo de estadísticas principales (normalmente NDVI o el seleccionado)
+    # Extraemos el NIR específicamente para darle una instrucción de "Alerta" a la IA
+    nir_val = stats_bandas.get('NIR', {}).get('media', 0) if stats_bandas else 0
+    alerta_biomasa = "ALERTA: NIR muy bajo. Priorizar análisis de densidad foliar." if nir_val < 0.25 else "NIR Normal."
+    
+    # Formateo de estadísticas principales
     s = {k: f"{v:.4f}" if isinstance(v, (int, float)) else v for k, v in stats.items()}
 
-    # Sección extra si el usuario eligió "TODOS"
+    # --- BLOQUE DE FIRMA ESPECTRAL (BANDAS PURAS) ---
+    bloque_firmas = ""
+    if stats_bandas:
+        bloque_firmas = "\n=== FIRMA ESPECTRAL PROMEDIO (Reflectancia) ===\n"
+        for banda, val in stats_bandas.items():
+            bloque_firmas += f"- {banda}: {val['media']:.3f}\n"
+
+    # --- BLOQUE COMPARATIVO (OTROS ÍNDICES) ---
     bloque_comparativo = ""
     if indices_multiples:
-        bloque_comparativo = "\n=== COMPARATIVA MULTIESPECTRAL (TODOS LOS ÍNDICES) ===\n"
+        bloque_comparativo = "\n=== CORRELACIÓN DE ÍNDICES ===\n"
         for idx, val in indices_multiples.items():
-            bloque_comparativo += f"- {idx.upper()}: Media={val['media']:.4f}, Máx={val['max']:.4f}, Mín={val['min']:.4f}\n"
+            if idx.lower() != index_name.lower(): # No repetir el principal
+                bloque_comparativo += f"- {idx.upper()}: Media={val['media']:.4f}\n"
 
     prompt = f'''
-    Eres un Agente de IA especializado en Teledetección y Agronomía de Precisión.
-    Tu misión es diagnosticar el estado del cultivo en la finca "{finca}".
-    
-    === CONTEXTO TÉCNICO ===
-    - Análisis Principal: {index_name.upper()}
-    - Sensor: {sensor} | Fecha: {fecha}
-    - Área: {area} m² | Resolución: {resolucion} m/px
-    {bloque_comparativo}
-    
-    === RADIOGRAFÍA ESTADÍSTICA ({index_name.upper()}) ===
-    - Rango: [{s['min']} a {s['max']}]
-    - Promedio (Media): {s['media']} | Robustez (Mediana): {s['mediana']}
-    - Dispersión (Desviación Std): {s['std']}
-    - Distribución de Vigor:
-      * 10% (Crítico): < {s['p10']}
-      * 25% (Bajo): < {s['p25']}
-      * 75% (Bueno): > {s['p75']}
-      * 90% (Óptimo): > {s['p90']}
-    
-    === OBJETIVO DEL USUARIO ===
-    "{aspectos}"
-    
-    === TAREA DE DIAGNÓSTICO ===
-    1. Interpretación de Salud: Analiza el {index_name.upper()}. Si hay múltiples índices, correlaciónalos (ej: ¿el NDWI de agua confirma el estrés del NDVI?).
-    2. Análisis de Homogeneidad: ¿Es un cultivo uniforme o fragmentado?
-    3. Respuesta a la Investigación: Aborda los aspectos solicitados.
-    4. Plan de Acción: Proporciona 3 recomendaciones técnicas basadas en la variabilidad detectada.
+    Eres un Agente de IA experto en Agronomía de Precisión y Teledetección. 
+    Analiza los datos de la finca "{finca}" capturados por el sensor {sensor}.
 
-    *Nota de Seguridad:* Si los valores son negativos o inusuales para vegetación, indica si puede ser por el tipo de sensor o cobertura de suelo (nubes, sombras, suelo desnudo).
-    
-    Responde en formato Markdown profesional.
+    === CONTEXTO GEOPACIAL ===
+    - Sensor: {sensor} (GSD: {gsd_cm:.2f} cm/px)
+    - Fecha de Captura: {fecha}
+    - Superficie Analizada: {area_ha:.2f} Hectáreas
+    - Análisis Líder: {index_name.upper()}
+    {bloque_firmas}
+    {bloque_comparativo}
+
+    === RADIOGRAFÍA ESTADÍSTICA DEL {index_name.upper()} ===
+    - Comportamiento: Media de {s['media']} con una desviación de {s['std']}.
+    - Rango Dinámico: [{s['min']} a {s['max']}]
+    - Segmentación de Vigor:
+      * Zonas Críticas (P10): < {s['p10']}
+      * Zonas de Alerta (P25): < {s['p25']}
+      * Zonas de Vigor Bueno (P75): > {s['p75']}
+      * Zonas de Vigor Óptimo (P90): > {s['p90']}
+
+    === CONSULTA DEL PRODUCTOR ===
+    "{objetivo}"
+
+    === TAREA DE DIAGNÓSTICO PROFESIONAL ===
+    1. Análisis de Firma: Cruce de Datos: Relaciona el {index_name.upper()} con el NIR. confirma pérdida de biomasa. Si el NDWI es bajo, cruza datos con estrés hídrico.?
+    2. Evaluación de Vigor: Identifica si la variabilidad (Std) sugiere necesidad de fertilización diferenciada.
+    3. Variabilidad: Evalúa la Desviación Estándar. ¿La finca requiere manejo por sitio específico (Mse) o es uniforme?
+    3. Acción Agronómica: Proporciona 3 recomendaciones de Alertas o Mejoraa y 3 basadas en el GSD de {gsd_cm:.1f} cm (aprovechando la alta resolución).
+    Responde de forma técnica pero comprensible para un agricultor, usando Markdown.
     '''
     return prompt
     
@@ -336,8 +351,22 @@ def generar_pdf_diagnostico(texto_markdown, nombre_finca):
 
 @app.post("/iniciar")
 def iniciar(req: InitRequest):
-    logger.info(f"🚀 Iniciando análisis: {req.index_name}")
-    return {"status": "ok", "Iniciado": True}
+    logger.info(f"🚀 Wake-up recibido para finca: {req.nmbre_fnca}")
+    
+    # ESTRATEGIA DE PRE-CARGA:
+    # Ejecutamos una operación matemática mínima de numpy para asegurar que esté en RAM
+    test_array = np.array([0.1, 0.5, 0.9])
+    test_mean = np.mean(test_array)
+    
+    # Intentamos acceder a la versión de rasterio para forzar la carga de sus drivers C
+    raster_version = rasterio.__version__
+    
+    return {
+        "status": "warm", 
+        "libs_ready": True, 
+        "raster_version": raster_version,
+        "msg": "Servicio caliente y listo"
+    }
 
 @app.post("/analisis_index")
 async def analisis_index(
